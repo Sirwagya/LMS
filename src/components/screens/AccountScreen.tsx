@@ -48,13 +48,10 @@ export interface AccountProfileData {
   institutionTag: string;
   cohortTag: string;
   statusBadge: string;
-  sectionBadge: string;
   enrollmentId: string;
   programme: string;
   currentSemesterLabel: string;
   cohort: string;
-  section: string;
-  advisor: string;
   avatarUrl: string;
   bannerUrl: string;
   platforms: CodingPlatform[];
@@ -70,13 +67,10 @@ const DEFAULT_PROFILE: AccountProfileData = {
   institutionTag: "Vedam School of Technology",
   cohortTag: "Cohort 2025–2029",
   statusBadge: "Enrolled · Cohort 2025–2029",
-  sectionBadge: "Batch B1 · Lab group G2",
   enrollmentId: "VDM-25-CSE-042",
   programme: "B.Tech CSE (AI)",
   currentSemesterLabel: "Semester 3",
   cohort: "2025–2029",
-  section: "Batch B1 · Lab group G2",
-  advisor: "Dr. Nandini Krishnan",
   avatarUrl: "",
   bannerUrl: "",
   platforms: [
@@ -570,7 +564,7 @@ export function AccountScreen() {
                   placeholder="Programme headline"
                 />
               </label>
-              <label className="account-field">
+              <label className="account-field" style={{ gridColumn: "1 / -1" }}>
                 <span>Enrollment status badge</span>
                 <input
                   type="text"
@@ -580,16 +574,6 @@ export function AccountScreen() {
                   placeholder="Enrolled · Cohort 2025–2029"
                 />
               </label>
-              <label className="account-field">
-                <span>Batch / Lab badge</span>
-                <input
-                  type="text"
-                  className="account-input"
-                  value={draft.sectionBadge}
-                  onChange={(e) => updateField("sectionBadge", e.target.value)}
-                  placeholder="Batch B1 · Lab group G2"
-                />
-              </label>
             </div>
           ) : (
             <div className="profile-summary">
@@ -597,7 +581,6 @@ export function AccountScreen() {
               <p>{activeData.headline}</p>
               <div className="profile-badges">
                 <Badge tone="success">{activeData.statusBadge}</Badge>
-                <Badge>{activeData.sectionBadge}</Badge>
                 <span className="record-id">{activeData.enrollmentId}</span>
               </div>
             </div>
@@ -915,24 +898,6 @@ export function AccountScreen() {
                   onChange={(e) => updateField("cohort", e.target.value)}
                 />
               </label>
-              <label className="account-field">
-                <span>Section</span>
-                <input
-                  type="text"
-                  className="account-input"
-                  value={draft.section}
-                  onChange={(e) => updateField("section", e.target.value)}
-                />
-              </label>
-              <label className="account-field">
-                <span>Academic advisor</span>
-                <input
-                  type="text"
-                  className="account-input"
-                  value={draft.advisor}
-                  onChange={(e) => updateField("advisor", e.target.value)}
-                />
-              </label>
             </div>
           ) : (
             <dl className="detail-list">
@@ -960,14 +925,6 @@ export function AccountScreen() {
               <div>
                 <dt>Cohort</dt>
                 <dd>{activeData.cohort}</dd>
-              </div>
-              <div>
-                <dt>Section</dt>
-                <dd>{activeData.section}</dd>
-              </div>
-              <div>
-                <dt>Academic advisor</dt>
-                <dd>{activeData.advisor}</dd>
               </div>
             </dl>
           )}
