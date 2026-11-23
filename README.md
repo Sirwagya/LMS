@@ -1,129 +1,98 @@
-# Vedam LMS · Student Workspace
+# Vedam LMS — local student and staff portals
 
-A high-craft, editorial learning management and academic tracking system built for students at **Vedam School of Technology**. Designed with a focus on typography, calm information density, responsive layouts, and interactive academic performance analytics.
+A working local learning management system built with React, TypeScript, Vite and a Node.js / SQLite backend. The shared 60/30/10 theme supports light and dark modes.
 
----
+## Run
 
-## ✦ Key Features
+Requires **Node.js 24 or newer** (uses built-in SQLite and TypeScript stripping).
 
-### 1. Dashboard (`#/dashboard`)
-- **Academic Metrics**: Side-by-side overall attendance percentage (with SVG radial dial) and average contest score across evaluated courses.
-- **Running / Upcoming Lecture**: Dynamic hero status showing current or next scheduled lecture with venue, time slot, instructor, and one-click lecture room join link.
-- **Enrolled Courses**: Grid of active semester subjects with instructors, course topics, credit counts, and quick navigation.
-- **Notice Board**: Institution announcements with priority tags and detailed side drawer reader.
-
-### 2. Overview & Analytics (`#/overview`)
-- **High-Level Statistics**: Semester-wide attendance percentage and contest mark performance.
-- **Subject-Wise Cards**: Minimalist course cards displaying attendance % and contest performance % at a glance.
-- **Interactive Contest Graphs**: Click any subject to reveal a smooth cubic-bezier contest progression chart featuring:
-  - Interactive cursor hairline tracking
-  - Glowing active data nodes
-  - Floating metric tooltip card displaying contest date, title, and score
-  - Clean horizontal gridlines and contextual percentage reference marks
-
-### 3. Lectures & Course Materials (`#/lectures`)
-- **Course Archive**: Browse lecture modules by course with real-time text search.
-- **Interactive Reader**: Structured notes view with downloadable reference slides, syllabus attachments, and supplementary code files.
-- **Key Takeaways & Discussion**: Summarized learning outcomes and simulated peer discussion thread.
-
-### 4. Schedule & Timetable (`#/schedule`)
-- **Interactive Monthly Calendar**: Day-by-day date grid with class indicator dots and active date highlighting.
-- **Day Agenda**: Hourly chronological schedule for any selected date with instructor and venue badges.
-- **Weekly Master Timetable**: Comprehensive matrix covering Monday through Friday classes and lab sessions.
-
-### 5. Fees & Ledger (`#/fees`)
-- **Tuition Overview**: Total semester fees, paid balance, and pending dues with deadline tracking.
-- **Online Payment Modal**: Simulated secure payment flow with card and net-banking options.
-- **Transaction History**: Downloadable fee receipts and itemized payment breakdown.
-
-### 6. Fully Editable Account Profile (`#/account`)
-- **Cover Banner & Avatar**: Upload custom cover banners and profile photos via local image picker with automatic preview, or use custom avatar initials.
-- **Student Profile**: Customize full name, degree headline, and enrollment status badge.
-- **Coding Profiles**: Edit handles, descriptions, and profile URLs for GitHub, LeetCode, CodeChef, and Codeforces, or add custom platforms.
-- **Student Details**: Edit Enrollment ID, Programme, Current Semester, and Cohort.
-- **Persistence**: All edits are automatically saved to `localStorage` with one-click **Save**, **Cancel**, and **Reset defaults** actions.
-
-### 7. Global Schedule Rail & Theming
-- **Persistent Side Rail**: Right-hand calendar rail with quick day agenda available across views, collapsing smoothly into an accordion on mobile viewports.
-- **System Theme Switcher**: Full support for dark and light modes with custom CSS tokens and high-contrast accessibility.
-
----
-
-## 🛠 Tech Stack
-
-- **Framework**: [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)
-- **Bundler & Tooling**: [Vite 8](https://vite.dev/)
-- **Icons**: [Lucide React](https://lucide.dev/)
-- **Linter**: [Oxlint](https://oxc.rs/)
-- **Styling**: Handcrafted CSS design tokens (`--surface`, `--canvas`, `--ink`, `--accent`, etc.) with responsive grid layouts and fluid typography.
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-- Node.js 18.0 or later
-- npm 9.0 or later
-
-### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/sirwagya/LMS.git
-cd LMS
-
-# Install dependencies
-npm install
-```
-
-### Development
-
-```bash
-# Start the Vite development server
+```sh
+npm ci
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) in your browser.
+Open http://127.0.0.1:5173. The development command starts the API on port 3001 and Vite on port 5173. For a compiled app with one server:
 
-### Linting & Type Checking
-
-```bash
-# Run Oxlint
-npm run lint
-
-# Type-check and build for production
+```sh
 npm run build
+npm start
 ```
 
----
+Open http://127.0.0.1:3001. Both servers bind to localhost. Stop with Ctrl+C.
 
-## 📂 Project Structure
+## Demo accounts
 
+| Portal | Email | Password |
+| --- | --- | --- |
+| Student | student@vedam.local | VedamLocal123! |
+| Teacher | teacher@vedam.local | VedamLocal123! |
+| Administrator | admin@vedam.local | VedamLocal123! |
+
+These are intentionally public **local sample accounts**. The student demo has seeded academic records. New student registrations start with zero attendance, no invoices and no results. All students can access the local course catalog. Administrators create additional student and teacher accounts through People. Public registration always creates a student; it cannot create staff accounts.
+
+## Student workflows
+
+- Sign in / register, sign out, and change password.
+- Search courses, browse semesters and lecture notes, download included sample notes and teacher-uploaded materials, watch uploaded MP4/WebM recordings.
+- Mark lectures complete; ask questions in lecture discussions.
+- Submit assignment answers/project links with an optional attachment (10 MB), update ungraded work, view teacher grades and feedback. Graded work is locked.
+- Review attendance, performance charts and the attendance planner. Recent course results are read-only staff evaluations.
+- Browse published calendar/day agenda/weekly schedule and notices.
+- Save account details, coding profiles, profile photo and banner to the backend. No profile is stored in browser localStorage; only the theme preference is.
+- Review invoices, simulate payment and download clearly labeled sample receipts. No card information or real payments are involved. Duplicate payments are rejected.
+
+## Teacher and administrator workflows
+
+- Staff overview with students, course counts and submissions awaiting review.
+- Create courses; update names and instructors.
+- Publish and edit lecture notes. Upload downloadable materials and small MP4/WebM recordings (10 MB per file).
+- Publish assignments, review student text/attachments and enter grades with feedback.
+- Record cumulative student attendance with count validation.
+- Publish dated class sessions; overlapping sessions are rejected. Edit announcements and publish notices.
+- Administrators additionally issue student invoices and create student/teacher accounts. Teachers cannot access these admin-only operations.
+
+## Data and implementation
+
+`server/index.mjs` serves authenticated APIs and the compiled frontend. SQLite stores users, password hashes, sessions, academic catalog, attendance, submissions/attachments, discussions, progress, invoices, simulated payments and uploaded materials. Data persists at `.data/lms.sqlite` and is excluded from Git. The database is initialized once from `server/seed.ts`. Back up the entire `.data` directory while the app is stopped. Do not commit it.
+
+`PORT` overrides the backend port; `LMS_DATA_DIR` overrides its data directory. If the API port changes during Vite development, also update the proxy in `vite.config.ts`.
+
+Authentication uses scrypt password hashes, expiring HttpOnly SameSite cookies, server-enforced roles and ownership checks. Changing a password revokes other sessions. API writes accept JSON from local origins only; request/file size limits and authentication attempt limits are enforced.
+
+This version is intended for local demo use. It does not connect to an institution, email provider, external video host, payment gateway or production identity service. Seeded historical academic records and receipts are illustrative. There is no email password recovery; use the documented sample accounts or another locally created account. Deleting/archiving historical academic records is intentionally not offered in the UI.
+
+## Validation
+
+```sh
+npm run build
+npm run lint
+npm test
 ```
-LMS/
-├── public/                 # Static public assets
-├── src/
-│   ├── assets/             # Brand logos & imagery
-│   ├── components/
-│   │   ├── layout/         # TopHeader, Navigation, ScheduleSidebar
-│   │   ├── modals/         # NoticesDrawer, PaymentModal, Toast
-│   │   ├── screens/        # Dashboard, Overview, Lectures, Schedule, Fees, Account
-│   │   └── ui/             # Reusable UI primitives (PageHeader, Metric, Badge, etc.)
-│   ├── context/            # LMSContext state provider & useLMS hook
-│   ├── data/               # Academic curriculum, schedule, notices & contest datasets
-│   ├── hooks/              # Custom React hooks (useDialog)
-│   ├── utils/              # Academic calculations & formatters
-│   ├── types.ts            # TypeScript interfaces & domain types
-│   ├── index.css           # Global CSS variables, typography & responsive layouts
-│   ├── App.tsx             # Root workspace container & hash router
-│   └── main.tsx            # Application entry point
-├── package.json
-├── tsconfig.json
-└── README.md
-```
 
----
+The integration test uses an isolated temporary SQLite database and checks authentication, student/staff authorization, new-user isolation, courses, lectures, assignments, uploads/download ownership, submission grading, attendance, discussions, scheduling conflicts, simulated payments/duplicate protection, receipts, persistence after restart, profile updates, password changes and logout.
 
-## 📄 License
+## Design and maintainability
 
-Private educational and portfolio project. Built for Vedam School of Technology.
+See [architecture and SOLID decisions](docs/ARCHITECTURE.md) for module boundaries, repository ports, dependency injection and transaction semantics.
+
+## Java / Python coding assignments
+
+Open **Assignments → Solve coding challenge**. The coding workspace includes a CodeMirror editor with highlighting, line numbers, indentation, Java/Python switching, per-user local drafts, example/custom-input runs, hidden-test submission judging, diagnostics and saved submission history. Accepted submissions receive a server-calculated grade and appear in the teacher's submissions list. Two sample problems (Two Sum and Valid Parentheses) are added automatically to existing databases. Teachers can create more challenges in **Assignments → Create coding challenge**, including public and hidden stdin/stdout test cases.
+
+Use `public class Main` in Java, or a normal stdin/stdout program in Python. Java/Python run using the machine's installed runtimes. This local implementation requires **macOS**, `/usr/bin/sandbox-exec`, Python (default `/opt/homebrew/bin/python3`) and a JDK discoverable by `/usr/libexec/java_home`. `LMS_PYTHON` and `JAVA_HOME` override runtime locations. Unsupported hosts fail closed; there is no unrestricted execution fallback.
+
+Each run uses an isolated temporary directory with a clean environment. The OS sandbox blocks networking, private user-file access and child-process creation. CPU/wall-clock, source/input/output, open-file, file-count and concurrent-run limits are enforced; the parent monitors memory and temporary files. Java uses a limited heap. The macOS memory monitor is polling-based, not a hard container memory quota. This is a **local teaching runner**, not a production multi-tenant judge; sandbox-exec is a deprecated macOS interface. Use an isolated container/VM execution provider for public deployment.
+
+Hidden test inputs, expected answers and output are removed from student API responses. Only staff can configure them. Run checks examples; Submit checks all cases. A custom run displays stdout without an expected-answer verdict. Up to 20 recent submission attempts are shown. An accepted/graded assignment is locked; code can still be edited and run for practice.
+
+
+### Method-only solutions and history
+
+Two Sum now exposes only `Solution.twoSum(nums, target)` (`int[]` return in Java, list of indices in Python); Valid Parentheses exposes `Solution.isValid(s)` returning a boolean. New teacher-created challenges expose `Solution.solve(input)` returning a string. Imports, input parsing, the executable entry point and output serialization are supplied by the runner. Existing custom stdin/stdout challenges keep their original contract. Sample assignments migrate in place on restart; previous submissions and old drafts are preserved, with a separate method-editor draft namespace.
+
+The problem pane has dedicated Description / Submissions tabs. The submission panel lists verdict, language, passed tests, time, timestamp and submitted source; select any attempt for its code and test details, copy it, or load compatible code into the editor. Older full-program attempts remain available for reference. Repeated coding submissions are supported after acceptance; unsuccessful attempts do not remove the last accepted grade. Written assignments retain their existing graded-submission lock.
+
+
+### Subject → lecture → learning content
+
+A subject opens a dedicated lecture catalog. Each lecture owns its recording, notes/materials, assignments and attendance section. The header breadcrumb links back through the subject and parent lecture. Written and coding assignments use the canonical address `#/subjects/{subject}/lectures/{lecture}/assignments/{assignment}`; coding screens return to their parent lecture. The assignments overview remains a shortcut into the same hierarchy. Legacy `#/coding/{assignment}` links redirect to the canonical nested URL. Route resolution rejects mismatched subject/lecture/assignment combinations. Searching the lecture list does not change the lecture displayed at the current URL.
