@@ -1,18 +1,24 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { X } from "lucide-react";
 import { useLMS } from "../../context/useLMS";
 import { useDialog } from "../../hooks/useDialog";
 import { formatCurrency } from "../../utils/academic";
 import { Badge } from "../ui/Workspace";
 
+import { api } from "../../portal/api";
+import { useSession } from "../../portal/session";
+
 export function PaymentModal() {
+  const { refresh } = useSession();
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
   const { isPaymentModalOpen, setIsPaymentModalOpen, fees } = useLMS();
   const close = useCallback(
     () => setIsPaymentModalOpen(false),
     [setIsPaymentModalOpen],
   );
   const ref = useDialog(isPaymentModalOpen, close);
-  const invoice = fees.find((f) => f.status === "Overdue");
+  const invoice = fees.find((f) => f.status !== "Paid");
   if (!isPaymentModalOpen || !invoice) return null;
   return (
     <div className="overlay" onClick={close}>
@@ -42,14 +48,6 @@ export function PaymentModal() {
         </p>
         <dl className="detail-list">
           <div>
-            <dt>Academic tuition fee</dt>
-            <dd>{formatCurrency(115000)}</dd>
-          </div>
-          <div>
-            <dt>Systems & GPU lab infrastructure</dt>
-            <dd>{formatCurrency(16250)}</dd>
-          </div>
-          <div>
             <dt>Due date</dt>
             <dd>{invoice.dueDate}</dd>
           </div>
@@ -59,10 +57,30 @@ export function PaymentModal() {
           </div>
         </dl>
         <p className="inline-note mt-6">
-          Online payment is not available in this workspace. Contact the finance
-          office to arrange payment and confirm your balance.
+          Local payment simulation. No card or bank details are needed and no
+          real money will be collected. A sample receipt will be generated.
         </p>
-        <button className="btn btn-secondary w-full mt-6" onClick={close}>
+        {error && <p role="alert">{error}</p>}
+        <button
+          className="btn btn-primary w-full mt-6"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            setError("");
+            try {
+              await api("/payments", "POST", { feeId: invoice.id });
+              await refresh();
+              close();
+            } catch (e) {
+              setError((e as Error).message);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {busy ? "Processing…" : "Simulate payment"}
+        </button>
+        <button className="btn btn-secondary w-full mt-3" onClick={close}>
           Close invoice
         </button>
       </div>

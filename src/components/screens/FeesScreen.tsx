@@ -5,7 +5,7 @@ import { PageHeader, SectionHeader, Metric, Badge } from "../ui/Workspace";
 export function FeesScreen() {
   const { fees, setIsPaymentModalOpen } = useLMS();
   const paid = fees.filter((f) => f.status === "Paid");
-  const overdue = fees.filter((f) => f.status === "Overdue");
+  const overdue = fees.filter((f) => f.status !== "Paid");
   const totalPaid = paid.reduce((sum, f) => sum + f.amount, 0);
   const outstanding = overdue.reduce((sum, f) => sum + f.amount, 0);
   return (
@@ -23,11 +23,11 @@ export function FeesScreen() {
         />
         <Metric
           className={`panel ${outstanding ? "fee-due" : ""}`}
-          label={outstanding ? "Overdue balance" : "Outstanding balance"}
+          label="Outstanding balance"
           value={formatCurrency(outstanding)}
           detail={
             outstanding
-              ? `${overdue.length} overdue installment · Due ${overdue[0]?.dueDate}`
+              ? `${overdue.length} unpaid installment · Due ${overdue[0]?.dueDate}`
               : "All recorded installments are paid"
           }
         />
@@ -35,8 +35,7 @@ export function FeesScreen() {
       {outstanding > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-4">
           <p className="muted text-xs">
-            Review the invoice breakdown before arranging payment with the
-            finance office.
+            Review the invoice and try the local payment simulation.
           </p>
           <button
             className="btn btn-primary"
@@ -69,6 +68,7 @@ export function FeesScreen() {
                   Amount
                 </th>
                 <th scope="col">Status</th>
+                <th scope="col">Receipt</th>
               </tr>
             </thead>
             <tbody>
@@ -96,14 +96,26 @@ export function FeesScreen() {
                       {item.status}
                     </Badge>
                   </td>
+                  <td>
+                    {item.status === "Paid" ? (
+                      <a
+                        className="text-link"
+                        href={`/api/receipts/${item.id}`}
+                      >
+                        Download receipt
+                      </a>
+                    ) : (
+                      "Awaiting payment"
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
         <p className="muted text-xs mt-4">
-          Receipt files are not available here yet. Contact the finance office
-          for an official copy.
+          Local sample receipts only. These are not official financial records;
+          no real money is collected.
         </p>
       </section>
     </section>

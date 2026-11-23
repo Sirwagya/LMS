@@ -1,4 +1,9 @@
+import { SubjectScreen } from "./components/screens/SubjectScreen";
+import { AssignmentDetail } from "./portal/AssignmentDetail";
+import { lecturesBySubject } from "./data/lmsData";
+import { resolveLearningRoute } from "./utils/learningRoutes";
 import React from "react";
+import { AssignmentsScreen } from "./portal/AssignmentsScreen";
 import { LMSProvider } from "./context/LMSContext";
 import { useLMS } from "./context/useLMS";
 import { PageHeader } from "./components/ui/Workspace";
@@ -14,19 +19,32 @@ import { PaymentModal } from "./components/modals/PaymentModal";
 import { NoticesDrawer } from "./components/modals/NoticesDrawer";
 import { Toast } from "./components/modals/Toast";
 
+const CodingWorkspace = React.lazy(() =>
+  import("./portal/coding/CodingWorkspace").then((m) => ({
+    default: m.CodingWorkspace,
+  })),
+);
+
 const AppContent: React.FC = () => {
   const { route, currentSemester } = useLMS();
   const showSchedule = route === "/dashboard" && currentSemester === 3;
 
-  const screenKey = route.startsWith("/subjects/")
-    ? `subject-${route.split("/")[2]}`
-    : route;
+  const screenKey = route;
 
   const renderCurrentScreen = () => {
-    if (route.startsWith("/subjects/")) {
-      return <LecturesScreen />;
-    }
+    const learning = resolveLearningRoute(route, lecturesBySubject);
+    if (learning?.assignment?.kind === "coding")
+      return (
+        <React.Suspense fallback={<p role="status">Opening code editor…</p>}>
+          <CodingWorkspace />
+        </React.Suspense>
+      );
+    if (learning?.kind === "assignment") return <AssignmentDetail />;
+    if (learning?.kind === "subject") return <SubjectScreen />;
+    if (learning?.kind === "lecture") return <LecturesScreen />;
     switch (route) {
+      case "/assignments":
+        return <AssignmentsScreen />;
       case "/overview":
         return <OverviewScreen />;
       case "/schedule":
