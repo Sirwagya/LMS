@@ -1,3 +1,5 @@
+import { subjectPath, assignmentPath } from "../../utils/learningRoutes";
+import { useSession } from "../../portal/session";
 import { useMemo, useState } from "react";
 import { ArrowLeft, Search, FileText } from "lucide-react";
 import { useLMS } from "../../context/useLMS";
@@ -5,8 +7,14 @@ import { lecturesBySubject } from "../../data/lmsData";
 import { attendance } from "../../utils/academic";
 import { PageHeader, Badge, EmptyState } from "../ui/Workspace";
 
+import {
+  AssignmentSubmission,
+  LearningTools,
+} from "../../portal/LearningTools";
+
 export function LecturesScreen() {
   const { currentSubjectCode, subjectByCode, selectedLectureId } = useLMS();
+  const { submissions } = useSession();
   const [query, setQuery] = useState("");
   const subject = subjectByCode(currentSubjectCode);
   const lectures = useMemo(
@@ -19,7 +27,7 @@ export function LecturesScreen() {
       .includes(query.toLowerCase().trim()),
   );
   const selected =
-    filtered.find((l) => l.id === selectedLectureId) || filtered[0];
+    lectures.find((l) => l.id === selectedLectureId) || filtered[0];
   if (!subject)
     return (
       <section className="screen">
@@ -28,16 +36,19 @@ export function LecturesScreen() {
           description="This course is not available in your academic record."
         />
         <a href="#/dashboard" className="btn btn-primary">
-          Back to courses
+          Back to subject
         </a>
       </section>
     );
   const att = attendance(subject);
   return (
     <section className="screen">
-      <a href="#/dashboard" className="text-link self-start">
+      <a
+        href={`#${subjectPath(currentSubjectCode)}`}
+        className="text-link self-start"
+      >
         <ArrowLeft />
-        Back to courses
+        Back to subject
       </a>
       <PageHeader
         eyebrow={`Semester coursework · ${subject.credits} credits`}
@@ -140,12 +151,74 @@ export function LecturesScreen() {
               </Badge>
             </div>
             <h2>{selected.title}</h2>
-            <p className="summary">{selected.summary}</p>
-            <section className="reader-section">
-              <h3>Lecture materials</h3>
+            <nav className="lecture-section-nav" aria-label="Lecture content">
+              <a
+                href="#lecture-video"
+                onClick={(e) => {
+                  e.preventDefault();
+                  document
+                    .getElementById("lecture-video")
+                    ?.scrollIntoView({ behavior: "smooth" });
+                }}
+              >
+                Video
+              </a>
+              <a
+                href="#lecture-notes"
+                onClick={(e) => {
+                  e.preventDefault();
+                  document
+                    .getElementById("lecture-notes")
+                    ?.scrollIntoView({ behavior: "smooth" });
+                }}
+              >
+                Notes
+              </a>
+              <a
+                href="#lecture-assignments"
+                onClick={(e) => {
+                  e.preventDefault();
+                  document
+                    .getElementById("lecture-assignments")
+                    ?.scrollIntoView({ behavior: "smooth" });
+                }}
+              >
+                Assignments ({selected.assignments.length})
+              </a>
+              <a
+                href="#lecture-attendance"
+                onClick={(e) => {
+                  e.preventDefault();
+                  document
+                    .getElementById("lecture-attendance")
+                    ?.scrollIntoView({ behavior: "smooth" });
+                }}
+              >
+                Attendance
+              </a>
+            </nav>
+            <section id="lecture-video" className="reader-section">
+              <h3>Lecture video</h3>
+              {selected.recordingUrl ? (
+                <video
+                  className="lecture-video"
+                  controls
+                  preload="metadata"
+                  src={selected.recordingUrl}
+                  aria-label="Lecture recording"
+                />
+              ) : (
+                <p className="inline-note mt-4">
+                  No recording has been uploaded for this lecture.
+                </p>
+              )}
+            </section>
+            <section id="lecture-notes" className="reader-section">
+              <h3>Notes & materials</h3>
+              <p className="summary lecture-notes-text">{selected.summary}</p>
               <p className="muted text-xs mb-3">
-                File details are listed below. Downloads and recordings are not
-                connected yet.
+                Download the published course materials below. Sample notes are
+                included for local learning.
               </p>
               {(selected.resources.length
                 ? selected.resources
@@ -160,16 +233,33 @@ export function LecturesScreen() {
                     )}
                   </span>
                   <span className="shrink-0">{res.size || res.type}</span>
+                  {res.url && (
+                    <a className="text-link" href={res.url} download>
+                      Download
+                    </a>
+                  )}
                 </div>
               ))}
             </section>
-            {!!selected.assignments.length && (
-              <section className="reader-section">
-                <h3>Assignments</h3>
-                {selected.assignments.map((item) => (
-                  <div key={item.id} className="assignment-row">
+            <section id="lecture-assignments" className="reader-section">
+              <h3>Assignments</h3>
+              {!selected.assignments.length && (
+                <p className="muted mt-3">
+                  No assignments have been published for this lecture.
+                </p>
+              )}
+              {selected.assignments.map((item) => (
+                <div key={item.id}>
+                  <div className="assignment-row">
                     <div>
-                      <h4>{item.title}</h4>
+                      <h4>
+                        <a
+                          className="lecture-assignment-link"
+                          href={`#${assignmentPath(currentSubjectCode, selected.id, item.id)}`}
+                        >
+                          {item.title}
+                        </a>
+                      </h4>
                       <p>
                         {item.dueDate
                           ? `Due ${item.dueDate}`
@@ -180,16 +270,46 @@ export function LecturesScreen() {
                     <Badge
                       tone={item.status === "Pending" ? "warning" : "success"}
                     >
-                      {item.status || "Not submitted"}
+                      {submissions.find(
+                        (s) => s.assignment_id === String(item.id),
+                      )?.score
+                        ? "Graded"
+                        : submissions.some(
+                              (s) => s.assignment_id === String(item.id),
+                            )
+                          ? "Submitted"
+                          : "Pending"}
                     </Badge>
                   </div>
-                ))}
-                <p className="muted text-xs mt-3">
-                  Assignment submissions are not available in this workspace
-                  yet.
-                </p>
-              </section>
-            )}
+                  <AssignmentSubmission key={item.id} assignment={item} />
+                </div>
+              ))}
+            </section>
+            <section id="lecture-attendance" className="reader-section">
+              <div className="section-header">
+                <h3>Attendance</h3>
+                <Badge
+                  tone={
+                    selected.attendance === "Present" ? "success" : "neutral"
+                  }
+                >
+                  {selected.attendance === "Awaiting"
+                    ? "Not recorded"
+                    : selected.attendance}
+                </Badge>
+              </div>
+              <p className="muted text-xs">
+                Your attendance record for this lecture. Lesson completion and
+                class attendance are tracked separately.
+              </p>
+              <p className="lecture-attendance-total">
+                Course total:{" "}
+                <strong>
+                  {att.attended}/{att.total} classes · {att.percent.toFixed(1)}%
+                </strong>
+              </p>
+            </section>
+            <LearningTools key={selected.id} lectureId={selected.id} />
           </article>
         ) : (
           <div className="panel">

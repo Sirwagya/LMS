@@ -13,7 +13,14 @@ export function ScheduleScreen() {
   const saturday = new Date(monday);
   saturday.setDate(saturday.getDate() + 5);
   const published =
-    currentSemester === 3 && weekOffset === 0 && demoWeek.published;
+    demoWeek.published &&
+    Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(monday);
+      d.setDate(d.getDate() + i);
+      return (demoWeek.days[localISO(d)] || []).some(
+        (e) => !!subjectByCode(e.code),
+      );
+    }).some(Boolean);
   const [today] = useState(() => localISO(new Date()));
   return (
     <section className="screen">
@@ -56,7 +63,9 @@ export function ScheduleScreen() {
           {Array.from({ length: 6 }, (_, i) => {
             const date = new Date(monday);
             date.setDate(date.getDate() + i);
-            const entries = demoWeek.days[localISO(date)] || [];
+            const entries = (demoWeek.days[localISO(date)] || []).filter(
+              (e) => !!subjectByCode(e.code),
+            );
             return (
               <article key={i} className="panel schedule-day">
                 <header>
@@ -110,7 +119,7 @@ export function ScheduleScreen() {
             description={
               currentSemester < 3
                 ? "Switch to Semester 3 to view the latest published timetable."
-                : "There is no published timetable for these dates. The latest available week is 19–24 October 2026."
+                : "There are no published classes for these dates. Browse weeks or return to the latest published week."
             }
           >
             {currentSemester === 3 && (

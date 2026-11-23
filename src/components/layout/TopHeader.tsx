@@ -1,4 +1,5 @@
-import { Bell, Sun, Moon, ChevronRight } from "lucide-react";
+import { LearningBreadcrumb } from "./LearningBreadcrumb";
+import { Bell, Sun, Moon } from "lucide-react";
 import { useLMS } from "../../context/useLMS";
 import { Navigation } from "./Navigation";
 
@@ -11,15 +12,18 @@ export function TopHeader() {
     setIsNoticesDrawerOpen,
     route,
   } = useLMS();
-  const label = route.startsWith("/subjects/")
-    ? "Coursework"
-    : ({
-        "/dashboard": "Dashboard",
-        "/overview": "Attendance & results",
-        "/schedule": "Timetable",
-        "/fees": "Fees",
-        "/account": "Account",
-      }[route] ?? "Workspace");
+  const label = route.startsWith("/coding/")
+    ? "Coding challenge"
+    : route.startsWith("/subjects/")
+      ? "Coursework"
+      : ({
+          "/dashboard": "Dashboard",
+          "/overview": "Attendance & results",
+          "/assignments": "Assignments & progress",
+          "/schedule": "Timetable",
+          "/fees": "Fees",
+          "/account": "Account",
+        }[route] ?? "Workspace");
   return (
     <header className="top-header">
       <div className="header-primary">
@@ -32,15 +36,7 @@ export function TopHeader() {
         <Navigation />
       </div>
       <div className="header-secondary">
-        <div className="breadcrumb">
-          <span className="breadcrumb-root">Student workspace</span>
-          <ChevronRight
-            className="breadcrumb-separator"
-            size={12}
-            aria-hidden="true"
-          />
-          <strong>{label}</strong>
-        </div>
+        <LearningBreadcrumb fallback={label} />
         <div className="header-tools">
           <label className="sr-only" htmlFor="semester">
             Academic semester

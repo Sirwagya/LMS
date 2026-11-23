@@ -21,7 +21,12 @@ import {
   drawerNotices,
   lecturesBySubject,
 } from "../../data/lmsData";
-import { attendance, formatDate, semesterStats } from "../../utils/academic";
+import {
+  attendance,
+  formatDate,
+  localISO,
+  semesterStats,
+} from "../../utils/academic";
 import { PageHeader, SectionHeader, Badge, EmptyState } from "../ui/Workspace";
 
 const courseIcons = [Code2, BrainCircuit, Globe, Lightbulb, Database, Network];
@@ -32,67 +37,32 @@ function toMinutes(hhmm: string) {
 }
 
 function getNextOrRunningSession() {
-  const dayKeys = Object.keys(demoWeek.days).sort();
-  if (!dayKeys.length) return null;
-
-  const now = new Date();
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  // Map Mon(0)..Sun(6) to published week days
-  const weekdayIdx = (now.getDay() + 6) % 7;
-
-  if (weekdayIdx < dayKeys.length) {
-    const todayKey = dayKeys[weekdayIdx]!;
-    const todayEntries = demoWeek.days[todayKey] || [];
-
-    const running = todayEntries.find(
-      (item) =>
-        nowMinutes >= toMinutes(item.from) && nowMinutes <= toMinutes(item.to),
-    );
-    if (running) {
+  const now = new Date(),
+    today = localISO(now),
+    minutes = now.getHours() * 60 + now.getMinutes();
+  for (const day of Object.keys(demoWeek.days).sort()) {
+    if (day < today) continue;
+    for (const session of demoWeek.days[day] || []) {
+      if (day === today && toMinutes(session.to) <= minutes) continue;
       return {
-        status: "running" as const,
-        dateKey: todayKey,
-        dayLabel: "Today",
-        session: running,
-      };
-    }
-
-    const upcomingToday = todayEntries.find(
-      (item) => toMinutes(item.from) > nowMinutes,
-    );
-    if (upcomingToday) {
-      return {
-        status: "upcoming" as const,
-        dateKey: todayKey,
-        dayLabel: "Today",
-        session: upcomingToday,
+        status:
+          day === today && toMinutes(session.from) <= minutes
+            ? ("running" as const)
+            : ("upcoming" as const),
+        dateKey: day,
+        dayLabel:
+          day === today ? "Today" : formatDate(new Date(`${day}T12:00:00`)),
+        session,
       };
     }
   }
-
-  // Otherwise pick the next available day in the schedule (wrapping around to Monday)
-  for (let offset = 1; offset <= dayKeys.length; offset++) {
-    const idx = (weekdayIdx + offset) % dayKeys.length;
-    const key = dayKeys[idx]!;
-    const entries = demoWeek.days[key] || [];
-    if (entries.length > 0) {
-      const dateObj = new Date(`${key}T12:00:00`);
-      const weekdayName = new Intl.DateTimeFormat("en-GB", {
-        weekday: "short",
-      }).format(dateObj);
-      return {
-        status: "upcoming" as const,
-        dateKey: key,
-        dayLabel: `${weekdayName}, ${formatDate(dateObj)}`,
-        session: entries[0]!,
-      };
-    }
-  }
-
   return null;
 }
 
+import { useSession } from "../../portal/session";
+
 export function DashboardScreen() {
+  const { user } = useSession();
   const {
     currentSemester,
     allSubjects,
@@ -123,7 +93,11 @@ export function DashboardScreen() {
     <section className="screen dashboard-screen">
       <PageHeader
         eyebrow={`B.Tech CSE (AI) · Semester ${currentSemester}`}
-        title={archived ? "Your semester archive." : "Welcome back, Sirwagya."}
+        title={
+          archived
+            ? "Your semester archive."
+            : `Welcome back, ${user.name.split(" ")[0]}.`
+        }
         description={
           archived
             ? "Revisit your courses and academic records from this semester."
@@ -213,7 +187,7 @@ export function DashboardScreen() {
             <article className="panel featured-lecture">
               <div className="featured-label">
                 <BookOpen size={15} aria-hidden="true" />
-                <span>Completed lecture</span>
+                <span>Latest lecture</span>
               </div>
               <p className="featured-course">{featuredSubject.name}</p>
               <h2>{featuredLecture.title}</h2>
@@ -242,7 +216,6 @@ export function DashboardScreen() {
           </strong>{" "}
           academic credits
         </span>
-        
       </div>
       <div>
         <SectionHeader

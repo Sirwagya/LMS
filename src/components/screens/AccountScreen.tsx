@@ -15,13 +15,8 @@ import {
   ImagePlus,
 } from "lucide-react";
 import { useLMS } from "../../context/useLMS";
-import { recentContests } from "../../data/lmsData";
-import {
-  PageHeader,
-  SectionHeader,
-  Badge,
-  EmptyState,
-} from "../ui/Workspace";
+import { recentContests, lecturesBySubject } from "../../data/lmsData";
+import { PageHeader, SectionHeader, Badge, EmptyState } from "../ui/Workspace";
 
 export interface CodingPlatform {
   id: string;
@@ -57,8 +52,6 @@ export interface AccountProfileData {
   platforms: CodingPlatform[];
   contestResults: EditableContestResult[];
 }
-
-const STORAGE_KEY = "vedam-account-profile-v1";
 
 const DEFAULT_PROFILE: AccountProfileData = {
   name: "Sirwagya Shekhar",
@@ -110,27 +103,12 @@ const DEFAULT_PROFILE: AccountProfileData = {
   contestResults: recentContests.map((c) => ({ ...c })),
 };
 
-function loadAccountProfile(): AccountProfileData {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_PROFILE;
-    const parsed = JSON.parse(raw) as Partial<AccountProfileData>;
-    return {
-      ...DEFAULT_PROFILE,
-      ...parsed,
-      platforms: Array.isArray(parsed.platforms)
-        ? parsed.platforms
-        : DEFAULT_PROFILE.platforms,
-      contestResults: Array.isArray(parsed.contestResults)
-        ? parsed.contestResults
-        : DEFAULT_PROFILE.contestResults,
-    };
-  } catch {
-    return DEFAULT_PROFILE;
-  }
-}
+import { useSession } from "../../portal/session";
+import { api } from "../../portal/api";
+import { PasswordForm } from "../../portal/PasswordForm";
 
 export function AccountScreen() {
+  const { user, submissions, refresh, logout } = useSession();
   const {
     currentSemester,
     theme,
@@ -141,7 +119,15 @@ export function AccountScreen() {
     subjectByCode,
   } = useLMS();
 
-  const [profile, setProfile] = useState<AccountProfileData>(loadAccountProfile);
+  const [profile, setProfile] = useState<AccountProfileData>(() => ({
+    ...DEFAULT_PROFILE,
+    ...user.profile,
+    platforms:
+      (user.profile.platforms as CodingPlatform[]) ||
+      (user.email === "student@vedam.local" ? DEFAULT_PROFILE.platforms : []),
+    name: user.name,
+    enrollmentId: `LOCAL-${user.id.slice(0, 8)}`,
+  }));
   const [draft, setDraft] = useState<AccountProfileData>(profile);
   const [isEditing, setIsEditing] = useState(false);
 
@@ -150,7 +136,25 @@ export function AccountScreen() {
 
   const activeData = isEditing ? draft : profile;
 
-  const contests = activeData.contestResults.filter((c) =>
+  const authoritativeResults: EditableContestResult[] = [
+    ...recentContests,
+    ...submissions
+      .filter((s) => s.score)
+      .map((s) => ({
+        id: s.id,
+        subjectCode: s.course,
+        title:
+          Object.values(lecturesBySubject)
+            .flat()
+            .flatMap((l) => l.assignments)
+            .find((a) => String(a.id) === s.assignment_id)?.title ||
+          "Assignment",
+        date: s.created.slice(0, 10),
+        score: s.score!,
+        rank: "—",
+      })),
+  ];
+  const contests = authoritativeResults.filter((c) =>
     allSubjects.some((s) => s.code === c.subjectCode),
   );
 
@@ -165,7 +169,7 @@ export function AccountScreen() {
     showToast("Changes discarded.");
   };
 
-  const saveChanges = () => {
+  const saveChanges = async () => {
     const cleaned: AccountProfileData = {
       ...draft,
       name: draft.name.trim() || DEFAULT_PROFILE.name,
@@ -181,23 +185,35 @@ export function AccountScreen() {
         "SS",
       enrollmentId: draft.enrollmentId.trim() || DEFAULT_PROFILE.enrollmentId,
     };
-    setProfile(cleaned);
-    setDraft(cleaned);
-    setIsEditing(false);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
-    } catch {
-      // Ignore storage quota errors if large images were selected
+      await api("/profile", "PUT", { profile: cleaned });
+      await refresh();
+      setProfile(cleaned);
+      setDraft(cleaned);
+      setIsEditing(false);
+      showToast("Account profile saved.");
+    } catch (e) {
+      showToast((e as Error).message);
     }
-    showToast("Account profile saved.");
   };
 
-  const resetDefaults = () => {
-    const fresh = structuredClone(DEFAULT_PROFILE);
+  const resetDefaults = async () => {
+    const fresh = {
+      ...structuredClone(DEFAULT_PROFILE),
+      name: user.name,
+      enrollmentId: `LOCAL-${user.id.slice(0, 8)}`,
+    };
+    try {
+      await api("/profile", "PUT", { profile: fresh });
+      await refresh();
+    } catch (e) {
+      showToast((e as Error).message);
+      return;
+    }
     setProfile(fresh);
     setDraft(fresh);
     setIsEditing(false);
-    localStorage.removeItem(STORAGE_KEY);
+
     showToast("Account profile reset to defaults.");
   };
 
@@ -268,45 +284,8 @@ export function AccountScreen() {
     }));
   };
 
-  const updateContestResult = (
-    id: string,
-    field: keyof EditableContestResult,
-    value: string,
-  ) => {
-    setDraft((prev) => ({
-      ...prev,
-      contestResults: prev.contestResults.map((c) =>
-        c.id === id ? { ...c, [field]: value } : c,
-      ),
-    }));
-  };
-
-  const addContestResult = () => {
-    const defaultSubject = allSubjects[0]?.code ?? "CS201";
-    const newContest: EditableContestResult = {
-      id: `ct-${Date.now()}`,
-      subjectCode: defaultSubject,
-      title: "New Assessment",
-      date: "Oct 2026",
-      score: "90 / 100",
-      rank: "12 of 120",
-    };
-    setDraft((prev) => ({
-      ...prev,
-      contestResults: [newContest, ...prev.contestResults],
-    }));
-  };
-
-  const removeContestResult = (id: string) => {
-    setDraft((prev) => ({
-      ...prev,
-      contestResults: prev.contestResults.filter((c) => c.id !== id),
-    }));
-  };
-
   const handleLogout = () => {
-    showToast("Signed out of student workspace.");
-    window.location.hash = "/dashboard";
+    logout().catch((e) => showToast(e.message));
   };
 
   return (
@@ -419,7 +398,9 @@ export function AccountScreen() {
                   onClick={() => bannerInputRef.current?.click()}
                 >
                   <ImagePlus size={13} aria-hidden="true" />
-                  <span>{draft.bannerUrl ? "Change cover" : "Upload cover"}</span>
+                  <span>
+                    {draft.bannerUrl ? "Change cover" : "Upload cover"}
+                  </span>
                 </button>
                 {draft.bannerUrl && (
                   <button
@@ -716,128 +697,31 @@ export function AccountScreen() {
         )}
       </section>
 
-      {/* Recent Course Results */}
       <section>
         <SectionHeader
           title="Recent course results"
-          detail={`Evaluated work from Semester ${currentSemester}.`}
-          action={
-            isEditing ? (
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={addContestResult}
-              >
-                <Plus aria-hidden="true" />
-                <span>Add result</span>
-              </button>
-            ) : undefined
-          }
+          detail={`Staff-evaluated work from Semester ${currentSemester}.`}
         />
-        {contests.length ? (
-          <div className="panel panel-padding">
-            {contests.map((c) =>
-              isEditing ? (
-                <div key={c.id} className="attendance-row contest-edit-row">
-                  <div className="account-edit-grid contest-edit-grid">
-                    <label className="account-field">
-                      <span>Assessment title</span>
-                      <input
-                        type="text"
-                        className="account-input"
-                        value={c.title}
-                        onChange={(e) =>
-                          updateContestResult(c.id, "title", e.target.value)
-                        }
-                      />
-                    </label>
-                    <label className="account-field">
-                      <span>Course</span>
-                      <select
-                        className="account-input"
-                        value={c.subjectCode}
-                        onChange={(e) =>
-                          updateContestResult(
-                            c.id,
-                            "subjectCode",
-                            e.target.value,
-                          )
-                        }
-                      >
-                        {allSubjects.map((s) => (
-                          <option key={s.code} value={s.code}>
-                            {s.name} ({s.code})
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="account-field">
-                      <span>Score</span>
-                      <input
-                        type="text"
-                        className="account-input"
-                        value={c.score}
-                        onChange={(e) =>
-                          updateContestResult(c.id, "score", e.target.value)
-                        }
-                      />
-                    </label>
-                    <label className="account-field">
-                      <span>Date</span>
-                      <input
-                        type="text"
-                        className="account-input"
-                        value={c.date}
-                        onChange={(e) =>
-                          updateContestResult(c.id, "date", e.target.value)
-                        }
-                      />
-                    </label>
-                    <label className="account-field">
-                      <span>Standing / Rank</span>
-                      <input
-                        type="text"
-                        className="account-input"
-                        value={c.rank}
-                        onChange={(e) =>
-                          updateContestResult(c.id, "rank", e.target.value)
-                        }
-                      />
-                    </label>
-                    <div className="contest-edit-actions">
-                      <button
-                        type="button"
-                        className="btn btn-quiet"
-                        onClick={() => removeContestResult(c.id)}
-                      >
-                        <Trash2 size={14} aria-hidden="true" />
-                        <span>Remove</span>
-                      </button>
-                    </div>
-                  </div>
+        <div className="panel panel-padding">
+          {contests.length ? (
+            contests.map((c) => (
+              <div key={c.id} className="attendance-row">
+                <div className="attendance-row-heading">
+                  <a href={`#/subjects/${c.subjectCode}`}>{c.title}</a>
+                  <strong>{c.score}</strong>
                 </div>
-              ) : (
-                <div key={c.id} className="attendance-row">
-                  <div className="attendance-row-heading">
-                    <a href={`#/subjects/${c.subjectCode}`}>{c.title}</a>
-                    <strong className="whitespace-nowrap">{c.score}</strong>
-                  </div>
-                  <p>
-                    {subjectByCode(c.subjectCode)?.name} · {c.date}
-                  </p>
-                  <p>Rank {c.rank}</p>
-                </div>
-              ),
-            )}
-          </div>
-        ) : (
-          <div className="panel">
+                <p>
+                  {subjectByCode(c.subjectCode)?.name} · {c.date}
+                </p>
+              </div>
+            ))
+          ) : (
             <EmptyState
               title="No recent results"
-              description="Your evaluated course contests will appear here when available."
+              description="Your teacher's grades will appear here after review."
             />
-          </div>
-        )}
+          )}
+        </div>
       </section>
 
       {/* Student Details & Workspace Preferences */}
@@ -985,6 +869,7 @@ export function AccountScreen() {
           </section>
         </div>
       </div>
+      <PasswordForm />
     </section>
   );
 }

@@ -4,6 +4,7 @@ import {
   CalendarDays,
   ReceiptText,
   UserRound,
+  ClipboardList,
 } from "lucide-react";
 import { useLMS } from "../../context/useLMS";
 
@@ -14,6 +15,7 @@ const destinations = [
     label: "Attendance & results",
     icon: ChartNoAxesCombined,
   },
+  { path: "/assignments", label: "Assignments", icon: ClipboardList },
   { path: "/schedule", label: "Timetable", icon: CalendarDays },
   { path: "/fees", label: "Fees", icon: ReceiptText },
   { path: "/account", label: "Account", icon: UserRound },
@@ -30,7 +32,8 @@ export function Navigation() {
           className="nav-item"
           aria-current={
             route === path ||
-            (path === "/dashboard" && route.startsWith("/subjects/"))
+            (path === "/dashboard" && route.startsWith("/subjects/")) ||
+            (path === "/assignments" && route.startsWith("/coding/"))
               ? "page"
               : undefined
           }

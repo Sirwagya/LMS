@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { resolveLearningRoute } from "../utils/learningRoutes";
+import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { useSession } from "../portal/session";
 import { LMSContext } from "./state";
 import {
   semesterSubjects,
@@ -17,14 +19,22 @@ function readRoute() {
 }
 
 function semesterForRoute(route: string) {
-  if (!route.startsWith("/subjects/")) return undefined;
-  const code = route.split("/")[2];
+  let code = route.split("/")[2];
+  if (route.startsWith("/coding/"))
+    code =
+      Object.keys(lecturesBySubject).find((c) =>
+        lecturesBySubject[c]?.some((l) =>
+          l.assignments.some((a) => String(a.id) === code),
+        ),
+      ) || "";
+  else if (!route.startsWith("/subjects/")) return undefined;
   return [1, 2, 3].find((sem) =>
     semesterSubjects[sem]?.some((s) => s.code === code),
   );
 }
 
 export function LMSProvider({ children }: { children: ReactNode }) {
+  useSession();
   const [route, setRoute] = useState(readRoute);
   const [currentSemester, setCurrentSemester] = useState(
     () => semesterForRoute(readRoute()) || 3,
@@ -48,6 +58,7 @@ export function LMSProvider({ children }: { children: ReactNode }) {
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
   const [isNoticesDrawerOpen, setIsNoticesDrawerOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const learning = resolveLearningRoute(route, lecturesBySubject);
   const currentSubjectCode = route.startsWith("/subjects/")
     ? route.split("/")[2] || ""
     : "";
@@ -55,10 +66,7 @@ export function LMSProvider({ children }: { children: ReactNode }) {
     route.split("/")[3] === "lectures"
       ? Number(route.split("/")[4])
       : (lecturesBySubject[currentSubjectCode]?.[0]?.id ?? null);
-  const allSubjects = useMemo(
-    () => semesterSubjects[currentSemester] || [],
-    [currentSemester],
-  );
+  const allSubjects = semesterSubjects[currentSemester] || [];
   const subjectByCode = useCallback(
     (code: string) =>
       Object.values(semesterSubjects)
@@ -104,6 +112,11 @@ export function LMSProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   useEffect(() => {
+    if (learning && route.startsWith("/coding/"))
+      window.location.replace(`#${learning.canonical}`);
+  }, [route, learning]);
+
+  useEffect(() => {
     const handleHashChange = () => {
       const next = readRoute();
       setRoute(next);
@@ -129,17 +142,24 @@ export function LMSProvider({ children }: { children: ReactNode }) {
   }, [toastMessage]);
 
   useEffect(() => {
-    const page = route.startsWith("/subjects/")
-      ? subjectByCode(currentSubjectCode)?.name || "Course not found"
-      : {
-          "/dashboard": "Dashboard",
-          "/overview": "Attendance & results",
-          "/schedule": "Timetable",
-          "/fees": "Fees & receipts",
-          "/account": "Account",
-        }[route] || "Page not found";
+    const page = learning?.assignment
+      ? learning.assignment.title
+      : learning?.lecture
+        ? learning.lecture.title
+        : route.startsWith("/coding/")
+          ? "Coding challenge"
+          : route.startsWith("/subjects/")
+            ? subjectByCode(currentSubjectCode)?.name || "Course not found"
+            : {
+                "/dashboard": "Dashboard",
+                "/overview": "Attendance & results",
+                "/assignments": "Assignments & progress",
+                "/schedule": "Timetable",
+                "/fees": "Fees & receipts",
+                "/account": "Account",
+              }[route] || "Page not found";
     document.title = `${page} · Vedam`;
-  }, [route, currentSubjectCode, subjectByCode]);
+  }, [route, currentSubjectCode, subjectByCode, learning]);
 
   const copyText = useCallback(
     async (value: string) => {
