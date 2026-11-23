@@ -21,11 +21,25 @@ export interface Notice {
   actionRoute?: string;
 }
 
+export interface CodingProblem {
+  entrypoint?: "twoSum" | "isValid" | "solve";
+  description: string;
+  inputFormat: string;
+  outputFormat: string;
+  constraints: string;
+  difficulty: "Easy" | "Medium" | "Hard";
+  starterCode: { python: string; java: string };
+  examples?: { input: string; expected: string }[];
+  testCases?: { input: string; expected: string; hidden: boolean }[];
+  totalTests?: number;
+}
 export interface Assignment {
+  kind?: "coding" | "written";
+  problem?: CodingProblem;
   id: string | number;
   title: string;
   dueDate?: string;
-  status?: 'Submitted' | 'Pending' | 'Graded';
+  status?: "Submitted" | "Pending" | "Graded";
   score?: string;
   uploadedAt?: string;
   url?: string | null;
@@ -46,7 +60,7 @@ export interface Lecture {
   unit: number;
   title: string;
   rawTitle: string;
-  attendance: 'Present' | 'Awaiting' | 'Excused';
+  attendance: "Present" | "Awaiting" | "Excused";
   summary: string;
   slides: string;
   duration?: string;
@@ -61,7 +75,7 @@ export interface ScheduleClass {
   code: string;
   room: string;
   topic: string;
-  type?: 'Lecture' | 'Lab' | 'Workshop';
+  type?: "Lecture" | "Lab" | "Workshop";
 }
 
 export interface WeekSchedule {
@@ -96,7 +110,7 @@ export interface ContestRecord {
   score: string;
   percent: number;
   rank: string;
-  status: 'Completed' | 'Reviewed';
+  status: "Completed" | "Reviewed";
 }
 
 export interface FeeItem {
@@ -107,6 +121,6 @@ export interface FeeItem {
   amount: number;
   dueDate: string;
   paidDate?: string;
-  status: 'Paid' | 'Overdue';
+  status: "Paid" | "Overdue" | "Pending";
   receiptAvailable: boolean;
 }
