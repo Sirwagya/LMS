@@ -66,8 +66,8 @@ export function StaffPortal() {
   ];
   return (
     <div className="app-shell">
-      <header className="top-header">
-        <div className="header-primary">
+      <header className="top-header" data-tauri-drag-region>
+        <div className="header-primary" data-tauri-drag-region>
           <a href="#" className="brand">
             <span className="brand-name">vedam</span>
             <span className="badge">
