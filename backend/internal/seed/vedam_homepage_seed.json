@@ -1,0 +1,163 @@
+{
+  "campus": { "id": 1, "name": "Vedam School of Technology", "organizationId": null },
+  "program": { "id": 1, "campusId": 1, "title": "BTech CSE AI 2025", "label": "BTECH_CSE_AI_25" },
+  "programEnrolment": {
+    "programEnrolmentId": 122,
+    "programId": 1,
+    "enrolmentDate": 1753313163,
+    "cprId": 125,
+    "campusId": 1,
+    "organizationId": null,
+    "personName": "Sirwagya Shekhar",
+    "email": "student@vedam.local",
+    "programTitle": "BTech CSE AI 2025",
+    "programLabel": "BTECH_CSE_AI_25"
+  },
+  "semesters": [
+    {
+      "id": 1,
+      "campusId": 1,
+      "programId": 1,
+      "title": "Semester 1 2025",
+      "label": "SEM1_25",
+      "startDate": 1754006400,
+      "endDate": 1764547200,
+      "programTitle": "BTech CSE AI 2025",
+      "programLabel": "BTECH_CSE_AI_25",
+      "requiredAttendance": 75
+    },
+    {
+      "id": 2,
+      "campusId": 1,
+      "programId": 1,
+      "title": "Semester 2 2026",
+      "label": "SEM2_26",
+      "startDate": 1767225600,
+      "endDate": 1780272000,
+      "programTitle": "BTech CSE AI 2025",
+      "programLabel": "BTECH_CSE_AI_25",
+      "requiredAttendance": 75
+    },
+    {
+      "id": 6,
+      "campusId": 1,
+      "programId": 1,
+      "title": "Bootcamp Summer 2026",
+      "label": "BTC_SUM_26",
+      "startDate": 1779062400,
+      "endDate": 1782777600,
+      "programTitle": "BTech CSE AI 2025",
+      "programLabel": "BTECH_CSE_AI_25",
+      "requiredAttendance": 75
+    },
+    {
+      "id": 3,
+      "campusId": 1,
+      "programId": 1,
+      "title": "Semester 3 2026",
+      "label": "SEM3_26",
+      "startDate": 1785715200,
+      "endDate": 1796860800,
+      "programTitle": "BTech CSE AI 2025",
+      "programLabel": "BTECH_CSE_AI_25",
+      "requiredAttendance": 75
+    }
+  ],
+  "faceBiometrics": {
+    "hasFaceData": true,
+    "faceJson": "{\"embedding\":[0.10518,0.11366,0.01764,-0.0946,-0.11987,-0.03493,0.08212,0.12367,0.05151,-0.068,-0.125,-0.06707,0.05252,0.12383,0.08129,-0.03599,-0.12017,-0.09387,0.01873,0.11412,0.10458,-0.00111,-0.10578,-0.1132,-0.01654,0.09532,0.11955,0.03386,-0.08295,-0.1235,-0.0505,0.06893,0.12499,0.06614,-0.05352,-0.12397,-0.08044,0.03705,0.12047,0.09314,-0.01983,-0.11457,-0.10397,0.00221,0.10636,0.11272,0.01545,-0.09603,-0.11922,-0.0328,0.08378,0.12333,0.04949,-0.06985,-0.12497,-0.06519,0.05452,0.12411,0.07959,-0.0381,-0.12076,-0.0924,0.02092,0.115,0.10335,-0.00332,-0.10694,-0.11224,-0.01435,0.09674,0.11888,0.03173,-0.0846,-0.12314,-0.04847,0.07076,0.12494,0.06425,-0.05551,-0.12424,-0.07874,0.03915,0.12105,0.09165,-0.02201,-0.11543,-0.10273,0.00442,0.10751,0.11175,0.01325,-0.09743,-0.11854,-0.03066,0.08541,0.12295,0.04745,-0.07167,-0.1249,-0.0633,0.0565,0.12435,0.07787,-0.0402,-0.12132,-0.09089,0.0231,0.11585,0.10209,-0.00553,-0.10807,-0.11125,-0.01215,0.09812,0.11818,0.02958,-0.08621,-0.12274,-0.04643,0.07258,0.12485,0.06234,-0.05749,-0.12446,-0.07701,0.04125,0.12158,0.09013]}",
+    "email": "student@vedam.local",
+    "personId": 125
+  },
+  "extraCourses": [
+    { "code": "CP601", "semester": 6, "credits": 2, "name": "Competitive Programming Bootcamp", "instructor": "Dr. Aravind Menon", "next": "Completed: Segment Trees, Fenwick & Game Theory", "att": "96%", "skips": "+4 skips" }
+  ],
+  "courseOfferings": [
+    { "id": 3, "courseId": 15, "courseCode": "CS201", "semesterId": 2, "label": "CS201", "title": "Data Structures & Algorithms-I B1", "batch": "B1", "credits": 4, "enrolmentCount": 140, "classSessionCount": 19 },
+    { "id": 4, "courseId": 17, "courseCode": "CS201", "semesterId": 2, "label": "CS201-PY", "title": "Python & Problem Solving B1", "batch": "B1", "credits": 4, "enrolmentCount": 140, "classSessionCount": 35 },
+    { "id": 6, "courseId": 16, "courseCode": "E0463A", "semesterId": 2, "label": "E0463A-S2", "title": "Frontend & Web Engineering B1", "batch": "B1", "credits": 4, "enrolmentCount": 140, "classSessionCount": 25 },
+    { "id": 8, "courseId": 2, "courseCode": "CS202", "semesterId": 2, "label": "CS202", "title": "Discrete Mathematical Structures B1", "batch": "B1", "credits": 4, "enrolmentCount": 140, "classSessionCount": 19 },
+    { "id": 10, "courseId": 10, "courseCode": "CS101", "semesterId": 1, "label": "CS101-A", "title": "Introduction to Programming A", "batch": "B1", "credits": 4, "enrolmentCount": 140, "classSessionCount": 39 },
+    { "id": 11, "courseId": 11, "courseCode": "CS101", "semesterId": 1, "label": "CS101-B", "title": "Introduction to Programming B", "batch": "B1", "credits": 4, "enrolmentCount": 140, "classSessionCount": 39 },
+    { "id": 12, "courseId": 12, "courseCode": "MA101", "semesterId": 1, "label": "MA101-A", "title": "Foundation Mathematics A", "batch": "B1", "credits": 4, "enrolmentCount": 140, "classSessionCount": 20 },
+    { "id": 13, "courseId": 13, "courseCode": "MA101", "semesterId": 1, "label": "MA101-B", "title": "Foundation Mathematics B", "batch": "B1", "credits": 4, "enrolmentCount": 140, "classSessionCount": 20 },
+    { "id": 14, "courseId": 14, "courseCode": "PH101", "semesterId": 1, "label": "PH101-A", "title": "Java Core Systems A", "batch": "B1", "credits": 4, "enrolmentCount": 140, "classSessionCount": 24 },
+    { "id": 15, "courseId": 14, "courseCode": "PH101", "semesterId": 1, "label": "PH101-B", "title": "Java Core Systems B", "batch": "B1", "credits": 4, "enrolmentCount": 140, "classSessionCount": 24 },
+    { "id": 16, "courseId": 16, "courseCode": "EN101", "semesterId": 1, "label": "EN101-A", "title": "Web Foundations & HTML/CSS A", "batch": "B1", "credits": 3, "enrolmentCount": 140, "classSessionCount": 33 },
+    { "id": 17, "courseId": 16, "courseCode": "EN101", "semesterId": 1, "label": "EN101-B", "title": "Web Foundations & HTML/CSS B", "batch": "B1", "credits": 3, "enrolmentCount": 140, "classSessionCount": 33 },
+    { "id": 18, "courseId": 18, "courseCode": "CP601", "semesterId": 6, "label": "CP601", "title": "Bootcamp Summer 2026 — Algorithms & Game Theory", "batch": "B1", "credits": 2, "enrolmentCount": 140, "classSessionCount": 28 },
+    { "id": 19, "courseId": 19, "courseCode": "EC201", "semesterId": 1, "label": "EC201-CP", "title": "Competitive Math & Logic", "batch": "B1", "credits": 4, "enrolmentCount": 140, "classSessionCount": 7 },
+    {
+      "id": 22, "courseId": 15, "courseCode": "E0460A", "semesterId": 3, "label": "E0460A",
+      "title": "Analysis and Design of Algorithms B1", "batch": "B1", "credits": 4,
+      "description": "An in-depth course that focuses on designing efficient algorithms and analyzing their time and space complexity. It covers fundamental algorithmic techniques, optimization strategies, and problem-solving approaches to build strong computational thinking skills.",
+      "iconUrl": "https://acjlsquedaotbhbxmtee.supabase.co/storage/v1/object/public/vedam-website-assets/images/footer/Vector.png",
+      "bgColor": "linear-gradient(180deg, #FEDBB7 0%, #FFF 100%)", "enrolmentCount": 140, "classSessionCount": 44, "courseRequiredAttendance": 75,
+      "enrolment": { "id": 2440, "enrolmentDate": 1785024000, "presentCount": 29, "absentCount": 4, "lateCount": 0, "leaveCount": 0, "excusedCount": 11, "awaitingCount": 0, "totalCount": 44 }
+    },
+    {
+      "id": 24, "courseId": 16, "courseCode": "E0463A", "semesterId": 3, "label": "E0463A",
+      "title": "Web Development-II B1", "batch": "B1", "credits": 4,
+      "description": "An advanced course that expands on modern web development concepts, covering backend technologies, database integration, APIs, authentication, and full-stack application development. The course equips learners with the skills to build secure, scalable, and dynamic web applications.",
+      "iconUrl": "https://acjlsquedaotbhbxmtee.supabase.co/storage/v1/object/public/vedam-website-assets/images/footer/Vector.png",
+      "bgColor": "linear-gradient(180deg, #A8F5F8 0%, #FFF 100%)", "enrolmentCount": 140, "classSessionCount": 36, "courseRequiredAttendance": 75,
+      "enrolment": { "id": 2380, "enrolmentDate": 1785024000, "presentCount": 22, "absentCount": 2, "lateCount": 0, "leaveCount": 0, "excusedCount": 12, "awaitingCount": 0, "totalCount": 36 }
+    },
+    {
+      "id": 26, "courseId": 17, "courseCode": "X0240A", "semesterId": 3, "label": "X0240A",
+      "title": "Introduction to Machine Learning B1", "batch": "B1", "credits": 4,
+      "description": "A foundational course that introduces the core concepts of machine learning, including supervised and unsupervised learning, model evaluation, and practical applications. The course develops the ability to build intelligent systems using data-driven approaches.",
+      "iconUrl": "https://acjlsquedaotbhbxmtee.supabase.co/storage/v1/object/public/vedam-website-assets/images/footer/Vector.png",
+      "bgColor": "linear-gradient(180deg, #F3E8FF 0%, #FFF 100%)", "enrolmentCount": 140, "classSessionCount": 42, "courseRequiredAttendance": 75,
+      "enrolment": { "id": 2320, "enrolmentDate": 1785024000, "presentCount": 25, "absentCount": 3, "lateCount": 0, "leaveCount": 0, "excusedCount": 13, "awaitingCount": 1, "totalCount": 42 }
+    },
+    {
+      "id": 28, "courseId": 18, "courseCode": "E0465B", "semesterId": 3, "label": "E0465B",
+      "title": "First Principle Thinking B1", "batch": "B1", "credits": 4,
+      "description": "A thought-provoking course that introduces the problem-solving framework of breaking complex challenges into their fundamental truths and reasoning from the ground up. The course fosters analytical thinking, innovation, and structured decision-making for real-world scenarios.",
+      "iconUrl": "https://acjlsquedaotbhbxmtee.supabase.co/storage/v1/object/public/vedam-website-assets/images/footer/Vector.png",
+      "bgColor": "linear-gradient(180deg, #A8F5F8 0%, #FFF 100%)", "enrolmentCount": 141, "classSessionCount": 18, "courseRequiredAttendance": 75,
+      "enrolment": { "id": 2260, "enrolmentDate": 1785024000, "presentCount": 11, "absentCount": 0, "lateCount": 0, "leaveCount": 0, "excusedCount": 7, "awaitingCount": 0, "totalCount": 18 }
+    },
+    {
+      "id": 29, "courseId": 19, "courseCode": "DB01B1", "semesterId": 3, "label": "E0464A",
+      "title": "Data Base Management System B1", "batch": "B1", "credits": 4,
+      "description": "A comprehensive course that covers the principles of database design, data modeling, SQL, normalization, and transaction management. The course enables learners to efficiently store, manage, and retrieve data while understanding the fundamentals of relational database systems.",
+      "iconUrl": "https://acjlsquedaotbhbxmtee.supabase.co/storage/v1/object/public/vedam-website-assets/images/footer/Vector.png",
+      "bgColor": "linear-gradient(180deg, #FEDBB7 0%, #FFF 100%)", "enrolmentCount": 141, "classSessionCount": 18, "courseRequiredAttendance": 75,
+      "enrolment": { "id": 2200, "enrolmentDate": 1785024000, "presentCount": 11, "absentCount": 2, "lateCount": 0, "leaveCount": 0, "excusedCount": 5, "awaitingCount": 0, "totalCount": 18 }
+    },
+    {
+      "id": 31, "courseId": 20, "courseCode": "SD01B1", "semesterId": 3, "label": "E0462A",
+      "title": "System Design-I B1", "batch": "B1", "credits": 4,
+      "description": "An introductory course that explores the fundamentals of designing scalable, reliable, and maintainable software systems. It covers system architecture, design principles, databases, networking basics, and component interactions to build a strong foundation in software engineering.",
+      "iconUrl": "https://acjlsquedaotbhbxmtee.supabase.co/storage/v1/object/public/vedam-website-assets/images/footer/Vector.png",
+      "bgColor": "linear-gradient(180deg, #FEDBB7 0%, #FFF 100%)", "enrolmentCount": 140, "classSessionCount": 19, "courseRequiredAttendance": 75,
+      "enrolment": { "id": 2140, "enrolmentDate": 1785024000, "presentCount": 15, "absentCount": 1, "lateCount": 0, "leaveCount": 0, "excusedCount": 3, "awaitingCount": 0, "totalCount": 19 }
+    }
+  ],
+  "classSessions": [
+    {"id":15,"courseOfferingId":3,"startTime":1771393800,"endTime":1771401000,"title":"LinkedList-1(Class and Objects)","room":"","programId":1,"semesterId":2,"cprId":125,"csCreatedAt":1771382011,"csUpdatedAt":1784791139,"label":"Lec8-B1","topic":"LinkedList-1(Class and Objects)"},
+    {"id":25,"courseOfferingId":4,"startTime":1773985200,"endTime":1773992400,"title":"Sorting - III","room":"","programId":1,"semesterId":2,"cprId":125,"csCreatedAt":1773399143,"csUpdatedAt":1776838208,"label":"Lec 20-B1","topic":"Sorting - III"},
+    {"id":26,"courseOfferingId":4,"startTime":1773718800,"endTime":1773726000,"title":"Sorting - II","room":"","programId":1,"semesterId":2,"cprId":125,"csCreatedAt":1773399313,"csUpdatedAt":1776838148,"label":"Lec 19-B1","topic":"Sorting - II"},
+    {"id":29,"courseOfferingId":6,"startTime":1773726000,"endTime":1773733200,"title":"WEB DEV (TaskManager APP)","room":"","programId":1,"semesterId":2,"cprId":125,"csCreatedAt":1773399503,"csUpdatedAt":1776842439,"label":"Lec 15-B1","topic":"WEB DEV (TaskManager APP)"},
+    {"id":30,"courseOfferingId":6,"startTime":1773812400,"endTime":1773819600,"title":"WEB DEV( React Hooks )","room":"","programId":1,"semesterId":2,"cprId":125,"csCreatedAt":1773399533,"csUpdatedAt":1776842471,"label":"Lec 16-B1","topic":"WEB DEV( React Hooks )"},
+    {"id":385,"courseOfferingId":18,"startTime":1779080400,"endTime":1779089400,"title":"Range Query: Prefix Sum Array","room":"","programId":1,"semesterId":6,"cprId":125,"csCreatedAt":1779078817,"csUpdatedAt":1779252334,"label":"LEC 1","topic":"Range Query: Prefix Sum Array"},
+    {"id":411,"courseOfferingId":18,"startTime":1780288200,"endTime":1780299000,"title":"Game Theory","room":"","programId":1,"semesterId":6,"cprId":125,"csCreatedAt":1780282929,"csUpdatedAt":1780647186,"label":"LEC 10","topic":"Game Theory"},
+    {"id":546,"courseOfferingId":22,"startTime":1785123000,"endTime":1785130200,"title":"Arrays 1 (prefix and suffix)","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1785076288,"csUpdatedAt":1787464556,"label":"LEC 0","topic":"Arrays 1 (prefix and suffix)"},
+    {"id":548,"courseOfferingId":24,"startTime":1785130200,"endTime":1785137400,"title":"Understanding Props,  State & useState in React","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1785076447,"csUpdatedAt":1787464295,"label":"LEC 1","topic":"Understanding Props,  State & useState in React"},
+    {"id":554,"courseOfferingId":26,"startTime":1785209400,"endTime":1785216600,"title":"Python Basics","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1785148810,"csUpdatedAt":1788345745,"label":"LEC 0","topic":"Python Basics"},
+    {"id":562,"courseOfferingId":28,"startTime":1785227520,"endTime":1785234720,"title":"First Principle Thinking ","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1785227578,"csUpdatedAt":1787504118,"label":"LEC 2","topic":"First Principle Thinking "},
+    {"id":578,"courseOfferingId":31,"startTime":1785749700,"endTime":1785753300,"title":"OOP Principles & Java Memory Mechanics","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1785749588,"csUpdatedAt":1788508875,"label":"LEC 1","topic":"OOP Principles & Java Memory Mechanics"},
+    {"id":638,"courseOfferingId":29,"startTime":1787560200,"endTime":1787565600,"title":"What is DBMS","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1787504244,"csUpdatedAt":1788319572,"label":"LEC 0","topic":"What is DBMS"},
+    {"id":1162,"courseOfferingId":31,"startTime":1793165400,"endTime":1793172600,"title":"Solid Principles - I","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1793151572,"csUpdatedAt":1795241589,"label":"LEC 14","topic":"Solid Principles - I"},
+    {"id":1174,"courseOfferingId":31,"startTime":1793251800,"endTime":1793259000,"title":"Solid Principles - II","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1793231355,"csUpdatedAt":1795241573,"label":"LEC 15","topic":"Solid Principles - II"},
+    {"id":1188,"courseOfferingId":31,"startTime":1793262600,"endTime":1793269800,"title":"Introduction to Design Patterns","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1793255381,"csUpdatedAt":1793265799,"label":"LEC 16","topic":"Introduction to Design Patterns"},
+    {"id":1192,"courseOfferingId":31,"startTime":1793338200,"endTime":1793345400,"title":"Builder Design Pattern","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1793326185,"csUpdatedAt":1793350932,"label":"LEC 17","topic":"Builder Design Pattern"},
+    {"id":1271,"courseOfferingId":31,"startTime":1794807000,"endTime":1794814200,"title":"Adapter and Strategy","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1794792499,"csUpdatedAt":1794972595,"label":"LEC 18","topic":"Adapter and Strategy"},
+    {"id":1278,"courseOfferingId":31,"startTime":1794893400,"endTime":1794900600,"title":"Decorator Design Pattern","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1794885236,"csUpdatedAt":1794972616,"label":"LEC 19","topic":"Decorator Design Pattern"},
+    {"id":1288,"courseOfferingId":31,"startTime":1794979800,"endTime":1794987000,"title":"Decorator and Observor","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1794970896,"csUpdatedAt":1795009399,"label":"LEC 20","topic":"Decorator and Observor"},
+    {"id":1302,"courseOfferingId":31,"startTime":1795066200,"endTime":1795073400,"title":"How to approach design problem?","room":"","programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1795057216,"csUpdatedAt":1795172921,"label":"LEC 21","topic":"How to approach design problem?"},
+    {"id":1306,"courseOfferingId":28,"startTime":1795163400,"endTime":1795170600,"title":"CCA","room":null,"programId":1,"semesterId":3,"cprId":125,"csCreatedAt":1795154577,"csUpdatedAt":1795154577,"label":"CCA","topic":"CCA"}
+  ]
+}

@@ -1,17 +1,18 @@
 # Vedam LMS — local student and staff portals
 
-A working local learning management system built with React, TypeScript, Vite and a Node.js / SQLite backend. The shared 60/30/10 theme supports light and dark modes.
+A working local learning management system built with React, TypeScript, Vite and a Go, PostgreSQL and Redis backend. The shared 60/30/10 theme supports light and dark modes.
 
 ## Run
 
-Requires **Node.js 24 or newer** (uses built-in SQLite and TypeScript stripping).
+Requires **Node.js 24+**, **Go 1.26+**, **PostgreSQL 17** and **Redis 7**. Use the services in `docker-compose.yml` or the local setup in [Phase 1](docs/phases/PHASE-1-GO-CORE-AND-POSTGRES.md#1-local-infrastructure-setup). To initialize the database and start development:
 
 ```sh
 npm ci
+(cd backend && go run ./cmd/seed)
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. The development command starts the API on port 3001 and Vite on port 5173. For a compiled app with one server:
+Open http://127.0.0.1:5173. The development command starts the Go API on port 3001, the outbox and grading worker, and Vite on port 5173. For a compiled app with one server:
 
 ```sh
 npm run build
@@ -53,11 +54,13 @@ These are intentionally public **local sample accounts**. The student demo has s
 
 ## Data and implementation
 
-`server/index.mjs` serves authenticated APIs and the compiled frontend. SQLite stores users, password hashes, sessions, academic catalog, attendance, submissions/attachments, discussions, progress, invoices, simulated payments and uploaded materials. Data persists at `.data/lms.sqlite` and is excluded from Git. The database is initialized once from `server/seed.ts`. Back up the entire `.data` directory while the app is stopped. Do not commit it.
+`backend/cmd/api` serves the authenticated API and compiled frontend. PostgreSQL stores accounts, catalog, course activity, grading and the simulated payment ledger. Redis stores sessions, rate limits, cached workspace projections and the grading queue. Uploaded files live in `backend/.data/assets` by default. The seed command initializes local demo data. The demo biometric fixture uses a synthetic embedding.
 
-`PORT` overrides the backend port; `LMS_DATA_DIR` overrides its data directory. If the API port changes during Vite development, also update the proxy in `vite.config.ts`.
+Copy `.env.example` to `.env` to customize connection URLs, `HTTP_ADDR`, asset storage and cookie security. Process environment variables take precedence over the file. If the API port changes during Vite development, update the proxy in `vite.config.ts`.
 
-Authentication uses scrypt password hashes, expiring HttpOnly SameSite cookies, server-enforced roles and ownership checks. Changing a password revokes other sessions. API writes accept JSON from local origins only; request/file size limits and authentication attempt limits are enforced.
+The web app authenticates with an expiring HttpOnly SameSite cookie. Native clients can use the bearer token returned by login. Set `SESSION_SLIDING=true` to renew the session on authenticated requests. New passwords use Argon2id, and successful login upgrades legacy scrypt hashes. Password changes and logout revoke existing sessions. The API enforces role checks, data ownership, upload limits and Redis-backed rate limits.
+
+The Go seed command initializes PostgreSQL from the checked-in fixtures. Existing SQLite files under `.data` are preserved on disk. Moving records created in the former SQLite app into PostgreSQL requires a separate data migration.
 
 This version is intended for local demo use. It does not connect to an institution, email provider, external video host, payment gateway or production identity service. Seeded historical academic records and receipts are illustrative. There is no email password recovery; use the documented sample accounts or another locally created account. Deleting/archiving historical academic records is intentionally not offered in the UI.
 
@@ -67,9 +70,10 @@ This version is intended for local demo use. It does not connect to an instituti
 npm run build
 npm run lint
 npm test
+(cd backend && go test -race -tags=integration ./...)
 ```
 
-The integration test uses an isolated temporary SQLite database and checks authentication, student/staff authorization, new-user isolation, courses, lectures, assignments, uploads/download ownership, submission grading, attendance, discussions, scheduling conflicts, simulated payments/duplicate protection, receipts, persistence after restart, profile updates, password changes and logout.
+HTTP tests use temporary schemas in the PostgreSQL database specified by `TEST_DATABASE_URL` (default `lms_test`), and start disposable Redis instances using `redis-server`. Set `TEST_REDIS_SERVER` to exercise a specific Redis version. The PostgreSQL repository contract tests reset the application schema in `lms_test`. The HTTP suite covers the student and staff workflows against Go, including persistence after restart, grading, authorization, sync and payments.
 
 ## Design and maintainability
 
@@ -77,18 +81,18 @@ See [architecture and SOLID decisions](docs/ARCHITECTURE.md) for module boundari
 
 ## Java / Python coding assignments
 
-Open **Assignments → Solve coding challenge**. The coding workspace includes a CodeMirror editor with highlighting, line numbers, indentation, Java/Python switching, per-user local drafts, example/custom-input runs, hidden-test submission judging, diagnostics and saved submission history. Accepted submissions receive a server-calculated grade and appear in the teacher's submissions list. Two sample problems (Two Sum and Valid Parentheses) are added automatically to existing databases. Teachers can create more challenges in **Assignments → Create coding challenge**, including public and hidden stdin/stdout test cases.
+Open **Assignments → Solve coding challenge**. The coding workspace includes a CodeMirror editor with highlighting, line numbers, indentation, Java/Python switching, per-user local drafts, example/custom-input runs, hidden-test submission judging, diagnostics and saved submission history. Accepted submissions receive a server-calculated grade and appear in the teacher's submissions list. The Go seed includes two sample problems, Two Sum and Valid Parentheses. Teachers can create more challenges in **Assignments → Create coding challenge**, including public and hidden stdin/stdout test cases.
 
 Use `public class Main` in Java, or a normal stdin/stdout program in Python. Java/Python run using the machine's installed runtimes. This local implementation requires **macOS**, `/usr/bin/sandbox-exec`, Python (default `/opt/homebrew/bin/python3`) and a JDK discoverable by `/usr/libexec/java_home`. `LMS_PYTHON` and `JAVA_HOME` override runtime locations. Unsupported hosts fail closed; there is no unrestricted execution fallback.
 
 Each run uses an isolated temporary directory with a clean environment. The OS sandbox blocks networking, private user-file access and child-process creation. CPU/wall-clock, source/input/output, open-file, file-count and concurrent-run limits are enforced; the parent monitors memory and temporary files. Java uses a limited heap. The macOS memory monitor is polling-based, not a hard container memory quota. This is a **local teaching runner**, not a production multi-tenant judge; sandbox-exec is a deprecated macOS interface. Use an isolated container/VM execution provider for public deployment.
 
-Hidden test inputs, expected answers and output are removed from student API responses. Only staff can configure them. Run checks examples; Submit checks all cases. A custom run displays stdout without an expected-answer verdict. Up to 20 recent submission attempts are shown. An accepted/graded assignment is locked; code can still be edited and run for practice.
+Hidden test inputs, expected answers and output are removed from student API responses. Only staff can configure them. Run checks examples; Submit checks all cases. A custom run displays stdout without an expected-answer verdict. Up to 20 recent submission attempts are shown. Written assignments lock after grading. Coding assignments accept repeated attempts.
 
 
 ### Method-only solutions and history
 
-Two Sum now exposes only `Solution.twoSum(nums, target)` (`int[]` return in Java, list of indices in Python); Valid Parentheses exposes `Solution.isValid(s)` returning a boolean. New teacher-created challenges expose `Solution.solve(input)` returning a string. Imports, input parsing, the executable entry point and output serialization are supplied by the runner. Existing custom stdin/stdout challenges keep their original contract. Sample assignments migrate in place on restart; previous submissions and old drafts are preserved, with a separate method-editor draft namespace.
+Two Sum now exposes only `Solution.twoSum(nums, target)` (`int[]` return in Java, list of indices in Python); Valid Parentheses exposes `Solution.isValid(s)` returning a boolean. New teacher-created challenges expose `Solution.solve(input)` returning a string. Imports, input parsing, the executable entry point and output serialization are supplied by the runner. Existing custom stdin/stdout challenges keep their original contract. The method editor uses a separate draft namespace so full-program drafts remain available.
 
 The problem pane has dedicated Description / Submissions tabs. The submission panel lists verdict, language, passed tests, time, timestamp and submitted source; select any attempt for its code and test details, copy it, or load compatible code into the editor. Older full-program attempts remain available for reference. Repeated coding submissions are supported after acceptance; unsuccessful attempts do not remove the last accepted grade. Written assignments retain their existing graded-submission lock.
 
