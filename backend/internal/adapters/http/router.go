@@ -64,34 +64,35 @@ type Assignments interface {
 }
 
 type Dependencies struct {
-	Log          *slog.Logger
-	PingDB       func(context.Context) error
-	Redis        *redis.Client
-	Sessions     *redisadapter.Sessions
-	Cache        *redisadapter.Cache
-	CookieSecure bool
-	SessionTTL   time.Duration
-	Web          http.Handler
-	Tx           uow.TxManager
-	Users        Users
-	Hasher       iam.PasswordHasher
-	Catalog      Catalog
-	Notices      catalog.NoticeRepository
-	Assignments  Assignments
-	Submissions  assessment.SubmissionRepository
-	Attendance   learning.AttendanceReader
-	Progress     Progress
-	Invoices     Invoices
-	Academic     Academic
-	Sync         Sync
-	AssetMeta    catalog.AssetMetadataRepository
-	Assets       *storage.LocalAssets
-	Bootstrap    *workspace.BootstrapService
-	Learning     *learningapp.Service
-	Staff        *staff.Service
-	Payments     *finance.PayInvoiceService
-	Coding       CodingService
-	Queue        *redisadapter.Queue
+	Log            *slog.Logger
+	PingDB         func(context.Context) error
+	Redis          *redis.Client
+	Sessions       *redisadapter.Sessions
+	Cache          *redisadapter.Cache
+	CookieSecure   bool
+	SessionSliding bool
+	SessionTTL     time.Duration
+	Web            http.Handler
+	Tx             uow.TxManager
+	Users          Users
+	Hasher         iam.PasswordHasher
+	Catalog        Catalog
+	Notices        catalog.NoticeRepository
+	Assignments    Assignments
+	Submissions    assessment.SubmissionRepository
+	Attendance     learning.AttendanceReader
+	Progress       Progress
+	Invoices       Invoices
+	Academic       Academic
+	Sync           Sync
+	AssetMeta      catalog.AssetMetadataRepository
+	Assets         *storage.LocalAssets
+	Bootstrap      *workspace.BootstrapService
+	Learning       *learningapp.Service
+	Staff          *staff.Service
+	Payments       *finance.PayInvoiceService
+	Coding         CodingService
+	Queue          *redisadapter.Queue
 }
 
 type api struct{ Dependencies }

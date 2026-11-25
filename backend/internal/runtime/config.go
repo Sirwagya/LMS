@@ -16,7 +16,7 @@ const defaultDBURL = "postgres://lms:lms_local_dev@127.0.0.1:5432/lms_dev?sslmod
 
 type Config struct {
 	Addr, DatabaseURL, RedisURL, Assets, Web, Grader string
-	CookieSecure                                     bool
+	CookieSecure, SessionSliding                     bool
 	SessionTTL                                       time.Duration
 }
 
@@ -56,6 +56,10 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid COOKIE_SECURE")
 	}
+	sliding, err := strconv.ParseBool(get("SESSION_SLIDING", "false"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid SESSION_SLIDING")
+	}
 	addr := get("HTTP_ADDR", "")
 	if addr == "" {
 		addr = "127.0.0.1:" + get("PORT", "3001")
@@ -63,7 +67,7 @@ func LoadConfig() (Config, error) {
 	return Config{
 		Addr: addr, DatabaseURL: get("DATABASE_URL", defaultDBURL), RedisURL: get("REDIS_URL", "redis://127.0.0.1:6379/0"),
 		Assets: path("ASSET_STORAGE_DIR", "backend/.data/assets"), Web: path("WEB_DIST_DIR", "dist"),
-		Grader: path("GRADER_BRIDGE_PATH", "grader/bridge.mjs"), CookieSecure: secure, SessionTTL: time.Duration(hours) * time.Hour,
+		Grader: path("GRADER_BRIDGE_PATH", "grader/bridge.mjs"), CookieSecure: secure, SessionSliding: sliding, SessionTTL: time.Duration(hours) * time.Hour,
 	}, nil
 }
 func readEnv(path string) (map[string]string, error) {

@@ -322,6 +322,19 @@ func TestHTTPRedisPostgresParity(t *testing.T) {
 		}
 	}
 
+	stale := map[string]any{"mutations": []any{map[string]any{
+		"idempotencyKey": "p-5", "entityType": "lecture_progress", "entityId": fmt.Sprint(progressID),
+		"baseVersion": 0, "payload": map[string]any{"complete": false, "clientTimestamp": 1000},
+	}}}
+	staleResult := decode[mutationResult](t, requireStatus(t, api, 200, "POST", "/api/v1/sync/push", stu.Token, "", stale))
+	if !bytes.Contains(staleResult.Results[0].Snapshot, []byte(`"complete":true`)) {
+		t.Fatal("stale offline progress overwrote newer state")
+	}
+
+	sessions := redisadapter.NewSessions(api.Redis, 2*time.Hour)
+	if _, err := sessions.Refresh(t.Context(), stu.Token); err != nil {
+		t.Fatal(err)
+	}
 	check := requireStatus(t, api, 200, "GET", "/api/v1/bootstrap", stu.Token, "", nil)
 	if !bytes.Contains(check.raw, []byte("Offline Student")) {
 		t.Fatal("stale personalized bootstrap")
@@ -406,6 +419,12 @@ func TestWorkerSSEAndGradingQueue(t *testing.T) {
 		}
 	}
 	runRequest := map[string]string{"assignmentId": "coding-two-sum", "language": "python", "source": "class Solution:\n    def twoSum(self, nums, target):\n        return [0, 1]", "action": "submit"}
+	unlock, ok, err := redisadapter.LockJudge(ctx, api.Redis, student.User.ID)
+	if err != nil || !ok {
+		t.Fatalf("judge lock: %t %v", ok, err)
+	}
+	requireStatus(t, api, 429, "POST", "/api/coding/evaluate", student.Token, "", runRequest)
+	unlock()
 	req, err = http.NewRequestWithContext(ctx, "POST", api.URL+"/api/v1/coding/evaluate", bytes.NewReader(mustJSON(t, runRequest)))
 	if err != nil {
 		t.Fatal(err)

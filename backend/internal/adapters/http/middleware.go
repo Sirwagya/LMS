@@ -131,6 +131,7 @@ func (a *api) authenticate(policy access, next http.Handler) http.Handler {
 			return
 		}
 		token := ""
+		fromCookie := false
 		if auth := r.Header.Get("Authorization"); auth != "" {
 			scheme, value, ok := strings.Cut(auth, " ")
 			if ok && strings.EqualFold(scheme, "Bearer") {
@@ -138,8 +139,13 @@ func (a *api) authenticate(policy access, next http.Handler) http.Handler {
 			}
 		} else if cookie, err := r.Cookie("lms_session"); err == nil {
 			token = cookie.Value
+			fromCookie = true
 		}
-		session, err := a.Sessions.Lookup(r.Context(), token)
+		lookup := a.Sessions.Lookup
+		if a.SessionSliding {
+			lookup = a.Sessions.Refresh
+		}
+		session, err := lookup(r.Context(), token)
 		if err != nil {
 			if !errors.Is(err, errs.ErrUnauthorized) {
 				err = problem(503, "Session service unavailable.")
@@ -149,6 +155,9 @@ func (a *api) authenticate(policy access, next http.Handler) http.Handler {
 		}
 		state := r.Context().Value(stateKey).(*requestState)
 		state.actor, state.token = session, token
+		if a.SessionSliding && fromCookie && !strings.HasSuffix(r.URL.Path, "/logout") && !strings.HasSuffix(r.URL.Path, "/password") {
+			a.cookie(w, token, int(a.SessionTTL.Seconds()))
+		}
 		next.ServeHTTP(w, r)
 	})
 }

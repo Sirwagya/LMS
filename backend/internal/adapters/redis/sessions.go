@@ -37,7 +37,7 @@ for _, id in ipairs(members) do
  if redis.call('EXISTS', 'sess:' .. id) == 0 then redis.call('SREM', KEYS[2], id) end
 end
 redis.call('SADD', KEYS[2], ARGV[5])
-redis.call('PEXPIRE', KEYS[2], ARGV[4])
+if redis.call('PTTL', KEYS[2]) < tonumber(ARGV[4]) then redis.call('PEXPIRE', KEYS[2], ARGV[4]) end
 return 1
 `)
 
@@ -68,6 +68,35 @@ func (s *Sessions) Lookup(ctx context.Context, token string) (Session, error) {
 		return Session{}, errs.ErrUnauthorized
 	}
 	return Session{result["user_id"], iam.Role(result["role"])}, nil
+}
+
+var refreshSession = redis.NewScript(`
+local session = redis.call('HMGET', KEYS[1], 'user_id', 'role', 'expires_ms')
+local t = redis.call('TIME')
+local now = t[1] * 1000 + math.floor(t[2]/1000)
+if not session[1] or not session[2] or tonumber(session[3] or '0') <= now then return {} end
+local ttl = tonumber(ARGV[1])
+local index = 'user_sess:' .. session[1]
+redis.call('HSET', KEYS[1], 'expires_ms', now + ttl)
+redis.call('PEXPIRE', KEYS[1], ttl)
+redis.call('SADD', index, ARGV[2])
+if redis.call('PTTL', index) < ttl then redis.call('PEXPIRE', index, ttl) end
+return {session[1], session[2]}
+`)
+
+func (s *Sessions) Refresh(ctx context.Context, token string) (Session, error) {
+	if len(token) != 64 {
+		return Session{}, errs.ErrUnauthorized
+	}
+	id := digest(token)
+	fields, err := refreshSession.Run(ctx, s.client, []string{"sess:" + id}, s.ttl.Milliseconds(), id).StringSlice()
+	if err != nil {
+		return Session{}, err
+	}
+	if len(fields) != 2 {
+		return Session{}, errs.ErrUnauthorized
+	}
+	return Session{fields[0], iam.Role(fields[1])}, nil
 }
 
 var revokeSessions = redis.NewScript(`

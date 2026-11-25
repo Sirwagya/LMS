@@ -58,7 +58,7 @@ These are intentionally public **local sample accounts**. The student demo has s
 
 Copy `.env.example` to `.env` to customize connection URLs, `HTTP_ADDR`, asset storage and cookie security. Process environment variables take precedence over the file. If the API port changes during Vite development, update the proxy in `vite.config.ts`.
 
-The web app authenticates with an expiring HttpOnly SameSite cookie. Native clients can use the bearer token returned by login. New passwords use Argon2id, and successful login upgrades legacy scrypt hashes. Password changes and logout revoke existing sessions. The API enforces role checks, data ownership, upload limits and Redis-backed rate limits.
+The web app authenticates with an expiring HttpOnly SameSite cookie. Native clients can use the bearer token returned by login. Set `SESSION_SLIDING=true` to renew the session on authenticated requests. New passwords use Argon2id, and successful login upgrades legacy scrypt hashes. Password changes and logout revoke existing sessions. The API enforces role checks, data ownership, upload limits and Redis-backed rate limits.
 
 The Go seed command initializes PostgreSQL from the checked-in fixtures. Existing SQLite files under `.data` are preserved on disk. Moving records created in the former SQLite app into PostgreSQL requires a separate data migration.
 

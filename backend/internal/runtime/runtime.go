@@ -112,7 +112,7 @@ func (rt *Runtime) Handler() (http.Handler, func(), error) {
 	}
 	return httpadapter.New(httpadapter.Dependencies{
 		Log: rt.Log, PingDB: rt.DB.Ping, Redis: rt.Redis, Sessions: redisadapter.NewSessions(rt.Redis, rt.Config.SessionTTL),
-		Cache: rt.Cache, CookieSecure: rt.Config.CookieSecure, SessionTTL: rt.Config.SessionTTL, Web: webFiles(rt.Config.Web),
+		Cache: rt.Cache, CookieSecure: rt.Config.CookieSecure, SessionSliding: rt.Config.SessionSliding, SessionTTL: rt.Config.SessionTTL, Web: webFiles(rt.Config.Web),
 		Tx: tx, Users: users, Hasher: hasher, Catalog: cat, Notices: notices, Assignments: assignments, Submissions: subs,
 		Attendance: attendance, Progress: progress, Invoices: invoices, Academic: postgres.NewAcademicRepo(tx), Sync: rt.Sync,
 		AssetMeta: assets, Assets: blob, Bootstrap: bootstrap,
