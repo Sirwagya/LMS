@@ -63,7 +63,7 @@ func LoadConfig() (Config, error) {
 	return Config{
 		Addr: addr, DatabaseURL: get("DATABASE_URL", defaultDBURL), RedisURL: get("REDIS_URL", "redis://127.0.0.1:6379/0"),
 		Assets: path("ASSET_STORAGE_DIR", "backend/.data/assets"), Web: path("WEB_DIST_DIR", "dist"),
-		Grader: path("GRADER_BRIDGE_PATH", "server/coding/bridge.mjs"), CookieSecure: secure, SessionTTL: time.Duration(hours) * time.Hour,
+		Grader: path("GRADER_BRIDGE_PATH", "grader/bridge.mjs"), CookieSecure: secure, SessionTTL: time.Duration(hours) * time.Hour,
 	}, nil
 }
 func readEnv(path string) (map[string]string, error) {

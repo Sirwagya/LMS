@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createJudge } from "./coding/judge.mjs";
-import { installCodingSamples } from "./coding/catalog.mjs";
-import { methodContracts } from "./coding/harness.mjs";
+import { createJudge } from "./judge.mjs";
 const judge = createJudge();
 const samples = {
   twoSum: {
@@ -42,34 +40,3 @@ for (const [entrypoint, sample] of Object.entries(samples))
       });
       assert.equal(result.verdict, "Accepted", JSON.stringify(result));
     });
-test("existing sample assignments migrate in place without resetting test cases or unrelated challenges", () => {
-  const custom = {
-    id: "custom",
-    kind: "coding",
-    problem: { description: "Preserve me" },
-  };
-  const old = {
-    id: "coding-two-sum",
-    kind: "coding",
-    problem: {
-      testCases: [{ input: "private", expected: "private", hidden: true }],
-    },
-  };
-  const academic = {
-    lecturesBySubject: { E0460A: [{ assignments: [custom, old] }] },
-  };
-  let persisted = 0;
-  installCodingSamples({ academic, persist: () => persisted++ });
-  assert.equal(old.problem.entrypoint, "twoSum");
-  assert.deepEqual(old.problem.starterCode, methodContracts.twoSum);
-  assert.equal(old.problem.testCases[0].input, "private");
-  assert.equal(custom.problem.description, "Preserve me");
-  installCodingSamples({ academic, persist: () => persisted++ });
-  assert.equal(
-    academic.lecturesBySubject.E0460A[0].assignments.filter(
-      (a) => a.id === "coding-two-sum",
-    ).length,
-    1,
-  );
-  assert.ok(persisted);
-});

@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -98,9 +97,6 @@ func startAPI(t *testing.T) liveAPI {
 	db.RawQuery = query.Encode()
 	cfg := Config{DatabaseURL: db.String(), RedisURL: "unix://" + socket, Assets: filepath.Join(data, "assets"), Web: filepath.Join(root, "dist"),
 		Grader: filepath.Join(root, "grader", "bridge.mjs"), SessionTTL: 24 * time.Hour}
-	if _, err := os.Stat(cfg.Grader); errors.Is(err, os.ErrNotExist) {
-		cfg.Grader = filepath.Join(root, "server", "coding", "bridge.mjs")
-	}
 	rt, err := Open(ctx, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

@@ -3,6 +3,13 @@
 > **Prerequisite**: [Phase 1](file:///Users/sirwagyashekhar/Projects/LMS/docs/phases/PHASE-1-GO-CORE-AND-POSTGRES.md) complete (`postgresql@17` & `redis` running, schema migrated, Go core + LSP contract tests passing).
 > **Phase Goal**: Build the Go HTTP/SSE server (`backend/cmd/api`), background Outbox/Grading worker (`backend/cmd/worker`), and Redis 7 adapters; achieve 100% API parity with every endpoint in [`server/routes/`](file:///Users/sirwagyashekhar/Projects/LMS/server/index.mjs); verify against existing integration suites; switch [`package.json`](file:///Users/sirwagyashekhar/Projects/LMS/package.json) to the Go backend; and retire `server/`.
 
+
+The Go API now serves the legacy routes and their v1 aliases. The original HTTP workflow scenario lives in [tests/lms.test.mjs](../../tests/lms.test.mjs). Go race-enabled integration tests cover Redis and PostgreSQL behavior, including duplicate payments, batch sync retries, event delivery and grading jobs. The SQLite-only test units were replaced by the Go repository and payment tests. The Node HTTP server has been retired. Phase 2 invokes the existing macOS sandbox through the temporary [grader bridge](../../grader/bridge.mjs).
+
+For asynchronous grading, send `Prefer: respond-async` on a v1 coding submission. The API returns `202` and a `Location` header for polling the job. The worker also publishes `grading.completed`. The default remains a synchronous verdict.
+
+Sync push accepts profile, lecture progress and discussion mutations. Results include `status`, `serverVersion`, `serverPayload` and an optional `reason`. An optional progress `clientTimestamp` is Unix milliseconds. The newer edit wins and the response includes the current state.
+
 ---
 
 ## 1. Middleware Chain of Responsibility (`adapters/http/middleware.go`)

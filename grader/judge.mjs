@@ -9,7 +9,9 @@ import {
   profileFor,
   launcherSource,
 } from "./sandbox.mjs";
-import { fail } from "../domain/validation.mjs";
+const fail = (status, message) => {
+  throw Object.assign(new Error(message), { status });
+};
 const normalize = (value) => value.replace(/\r\n/g, "\n").trimEnd();
 export function createJudge({
   run = execute,

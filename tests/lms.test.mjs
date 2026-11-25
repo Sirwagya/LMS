@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { isolatedGoServer } from "../tests/go-server.mjs";
+import { isolatedGoServer } from "./go-server.mjs";
 
 test(
   "local LMS: roles, learning, persistence, files and simulated ledger",

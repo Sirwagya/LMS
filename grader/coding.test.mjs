@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync,writeFileSync,rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createJudge } from './coding/judge.mjs';
+import { createJudge } from './judge.mjs';
 const judge=createJudge();
 const evaluate=(language,source,cases=[{input:'2 3\n',expected:'5',hidden:false}])=>judge.evaluate({language,source,testCases:cases});
 
