@@ -25,3 +25,7 @@ dist-ssr
 
 # Local database and uploaded files
 .data/
+.env
+backend/.data/
+backend/bin/
+target/
