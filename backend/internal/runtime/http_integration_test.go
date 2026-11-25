@@ -35,6 +35,30 @@ type liveAPI struct {
 	URL string
 }
 
+var (
+	graderBuildOnce sync.Once
+	graderBuildErr  error
+)
+
+func resolveTestGraderBinary(t *testing.T, root string) string {
+	t.Helper()
+	bin := filepath.Join(root, "target", "release", "lms-grader")
+	graderBuildOnce.Do(func() {
+		if _, err := os.Stat(bin); err == nil {
+			return
+		}
+		cmd := exec.Command("cargo", "build", "--release", "-p", "lms-grader")
+		cmd.Dir = root
+		if out, err := cmd.CombinedOutput(); err != nil {
+			graderBuildErr = fmt.Errorf("build lms-grader: %w: %s", err, out)
+		}
+	})
+	if graderBuildErr != nil {
+		t.Fatal(graderBuildErr)
+	}
+	return bin
+}
+
 func startAPI(t *testing.T) liveAPI {
 	t.Helper()
 	root, err := filepath.Abs("../../..")
@@ -96,7 +120,7 @@ func startAPI(t *testing.T) liveAPI {
 	query.Set("search_path", schema+",public")
 	db.RawQuery = query.Encode()
 	cfg := Config{DatabaseURL: db.String(), RedisURL: "unix://" + socket, Assets: filepath.Join(data, "assets"), Web: filepath.Join(root, "dist"),
-		Grader: filepath.Join(root, "grader", "bridge.mjs"), SessionTTL: 24 * time.Hour}
+		Grader: resolveTestGraderBinary(t, root), SessionTTL: 24 * time.Hour}
 	rt, err := Open(ctx, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

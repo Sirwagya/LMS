@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+
+	"vedam/lms/internal/domain/errs"
 )
 
 type Case struct {
@@ -13,12 +15,14 @@ type Case struct {
 	Expected *string `json:"expected"`
 	Hidden   bool    `json:"hidden"`
 }
+
 type Request struct {
 	Language   string `json:"language"`
 	Source     string `json:"source"`
 	Entrypoint string `json:"entrypoint"`
 	Cases      []Case `json:"testCases"`
 }
+
 type CaseResult struct {
 	Index      int             `json:"index"`
 	Hidden     bool            `json:"hidden"`
@@ -29,6 +33,7 @@ type CaseResult struct {
 	Stdout     *string         `json:"stdout,omitempty"`
 	Stderr     *string         `json:"stderr,omitempty"`
 }
+
 type Result struct {
 	Verdict      string       `json:"verdict"`
 	Passed       int          `json:"passed"`
@@ -37,33 +42,53 @@ type Result struct {
 	Results      []CaseResult `json:"results"`
 	AttemptID    string       `json:"attemptId,omitempty"`
 }
+
 type Unavailable struct{ Message string }
 
 func (e Unavailable) Error() string { return e.Message }
 
-type Bridge struct{ Path string }
+type BusyError struct{ Message string }
 
-func (b Bridge) Evaluate(ctx context.Context, req Request) (Result, error) {
+func (e BusyError) Error() string { return e.Message }
+
+// Evaluator defines the consumer-segregated port for sandboxed code grading (DIP).
+type Evaluator interface {
+	Evaluate(ctx context.Context, req Request) (Result, error)
+}
+
+// Binary adapts the compiled Rust `lms-grader` executable via JSON-over-stdin/stdout.
+type Binary struct{ Path string }
+
+func (b Binary) Evaluate(ctx context.Context, req Request) (Result, error) {
+	if b.Path == "" {
+		return Result{}, Unavailable{"Sandboxed grader binary path is not configured."}
+	}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return Result{}, err
 	}
-	cmd := exec.CommandContext(ctx, "node", b.Path)
+	cmd := exec.CommandContext(ctx, b.Path)
 	cmd.Stdin = bytes.NewReader(data)
 	raw, err := cmd.Output()
 	if err != nil {
-		return Result{}, fmt.Errorf("start sandboxed grader: %w", err)
+		return Result{}, fmt.Errorf("start sandboxed grader (%s): %w", b.Path, err)
 	}
 	var response struct {
-		Result  Result
-		Status  int
-		Message string
+		Result  Result `json:"result"`
+		Status  int    `json:"status"`
+		Message string `json:"message"`
 	}
 	if err := json.Unmarshal(raw, &response); err != nil {
 		return Result{}, fmt.Errorf("decode grader result: %w", err)
 	}
-	if response.Status != 0 {
-		return Result{}, Unavailable{response.Message}
+	switch response.Status {
+	case 0:
+	case 400:
+		return Result{}, errs.New(errs.ErrValidation, "INVALID_CODE_REQUEST", response.Message)
+	case 429:
+		return Result{}, BusyError{Message: response.Message}
+	default:
+		return Result{}, Unavailable{Message: response.Message}
 	}
 	result := response.Result
 	if result.Verdict == "" || result.Total != len(req.Cases) || len(result.Results) > len(req.Cases) {

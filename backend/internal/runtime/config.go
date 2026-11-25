@@ -64,10 +64,19 @@ func LoadConfig() (Config, error) {
 	if addr == "" {
 		addr = "127.0.0.1:" + get("PORT", "3001")
 	}
+	graderPath := path("GRADER_BINARY_PATH", "target/release/lms-grader")
+	if os.Getenv("GRADER_BINARY_PATH") == "" {
+		if _, err := os.Stat(graderPath); err != nil {
+			debugPath := filepath.Join(root, "target/debug/lms-grader")
+			if _, debugErr := os.Stat(debugPath); debugErr == nil {
+				graderPath = debugPath
+			}
+		}
+	}
 	return Config{
 		Addr: addr, DatabaseURL: get("DATABASE_URL", defaultDBURL), RedisURL: get("REDIS_URL", "redis://127.0.0.1:6379/0"),
 		Assets: path("ASSET_STORAGE_DIR", "backend/.data/assets"), Web: path("WEB_DIST_DIR", "dist"),
-		Grader: path("GRADER_BRIDGE_PATH", "grader/bridge.mjs"), CookieSecure: secure, SessionSliding: sliding, SessionTTL: time.Duration(hours) * time.Hour,
+		Grader: graderPath, CookieSecure: secure, SessionSliding: sliding, SessionTTL: time.Duration(hours) * time.Hour,
 	}, nil
 }
 func readEnv(path string) (map[string]string, error) {

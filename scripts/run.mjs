@@ -6,6 +6,12 @@ import { join } from "node:path";
 const directory = mkdtempSync(join(tmpdir(), "vedam-lms-"));
 process.on("exit", () => rmSync(directory, { recursive: true, force: true }));
 
+const rustBuild = spawnSync("cargo", ["build", "--release", "-p", "lms-grader"], {
+  stdio: "inherit",
+});
+if (rustBuild.error) console.error(rustBuild.error.message);
+if (rustBuild.status !== 0) process.exit(rustBuild.status || 1);
+
 const build = spawnSync("go", ["build", "-o", directory + "/", "./cmd/api", "./cmd/worker"], {
   cwd: "backend",
   stdio: "inherit",

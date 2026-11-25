@@ -60,7 +60,7 @@ func Open(ctx context.Context, config Config, log *slog.Logger) (*Runtime, error
 	cache := redisadapter.NewCache(client)
 	return &Runtime{Config: config, Log: log, DB: db, Redis: client, Tx: tx, Sync: changes, Cache: cache,
 		Queue: redisadapter.NewQueue(client),
-		Coding: &coding{tx: tx, changes: changes, cache: cache, client: client, bridge: grader.Bridge{Path: config.Grader},
+		Coding: &coding{tx: tx, changes: changes, cache: cache, client: client, bridge: grader.Binary{Path: config.Grader},
 			assignments: postgres.NewAssignmentRepo(tx), attempts: postgres.NewCodingAttemptRepo(tx), submissions: postgres.NewSubmissionRepo(tx), slots: make(chan struct{}, 2)},
 	}, nil
 }

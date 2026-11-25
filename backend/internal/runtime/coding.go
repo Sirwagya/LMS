@@ -24,7 +24,7 @@ type coding struct {
 	changes     *postgres.SyncRepo
 	cache       *redisadapter.Cache
 	client      *redis.Client
-	bridge      grader.Bridge
+	bridge      grader.Evaluator
 	assignments *postgres.AssignmentRepo
 	attempts    *postgres.CodingAttemptRepo
 	submissions *postgres.SubmissionRepo

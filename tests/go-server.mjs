@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { randomBytes } from "node:crypto";
@@ -29,6 +29,7 @@ export async function isolatedGoServer() {
     DATABASE_URL: db.href,
     REDIS_URL: "unix://" + socket,
     ASSET_STORAGE_DIR: join(dir, "assets"),
+    GRADER_BINARY_PATH: resolve("target/release/lms-grader"),
     COOKIE_SECURE: "false",
   };
   let child, redis, schemaCreated = false;
@@ -58,6 +59,7 @@ export async function isolatedGoServer() {
         await delay(50);
       }
     }
+    await exec("cargo", ["build", "--release", "-p", "lms-grader"]);
     await exec("go", ["build", "-o", dir + "/", "./cmd/api", "./cmd/seed"], { cwd: "backend", env });
     await exec(join(dir, "seed"), [], { env });
     return {

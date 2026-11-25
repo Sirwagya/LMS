@@ -69,9 +69,12 @@ func (a *api) evaluate(w http.ResponseWriter, r *http.Request) error {
 	}
 	result, err := a.Coding.Run(r.Context(), job, custom, action == "submit")
 	var unavailable grader.Unavailable
+	var busy grader.BusyError
 	switch {
 	case errors.Is(err, ErrEvaluationBusy), errors.Is(err, ErrRunnerBusy):
 		return problem(429, err.Error())
+	case errors.As(err, &busy):
+		return problem(429, busy.Error())
 	case errors.Is(err, errs.ErrValidation):
 		return invalid(err.Error())
 	case errors.As(err, &unavailable):
