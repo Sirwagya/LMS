@@ -301,10 +301,12 @@ func (r *CatalogRepo) GetLecture(ctx context.Context, id int64) (*catalog.Lectur
 func (r *CatalogRepo) CreateLecture(ctx context.Context, l *catalog.Lecture) (int64, error) {
 	var id int64
 	err := r.tx.Querier(ctx).QueryRow(ctx, `
-		INSERT INTO lectures (course_code, lecture_code, lecture_date, month_label, unit_number, title, raw_title, default_att, summary, slides, duration, recording_url, sort_order)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		RETURNING id
-	`, l.CourseCode, l.Code, l.Date, l.Month, l.Unit, l.Title, l.RawTitle, l.Attendance, l.Summary, l.Slides, l.Duration, l.RecordingURL, l.SortOrder).Scan(&id)
+   INSERT INTO lectures (course_code, lecture_code, lecture_date, month_label, unit_number, title, raw_title, default_att, summary, slides, duration, recording_url, sort_order)
+   SELECT $1, COALESCE(NULLIF($2,''),'LEC ' || (COUNT(*)+1)::text), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+          CASE WHEN $2='' THEN COALESCE(MIN(sort_order),0)-1 ELSE $13 END
+   FROM lectures WHERE course_code=$1
+   RETURNING id,lecture_code,sort_order
+ `, l.CourseCode, l.Code, l.Date, l.Month, l.Unit, l.Title, l.RawTitle, l.Attendance, l.Summary, l.Slides, l.Duration, l.RecordingURL, l.SortOrder).Scan(&id, &l.Code, &l.SortOrder)
 	return id, mapPGError(err)
 }
 
@@ -455,4 +457,19 @@ func (r *AssetMetaRepo) GetByID(ctx context.Context, id string) (*catalog.Asset,
 		return nil, mapPGError(err)
 	}
 	return &a, nil
+}
+
+func (r *UserRepo) UpdatePasswordIfCurrent(ctx context.Context, userID, current, replacement string) (bool, error) {
+	var actual string
+	err := r.tx.Querier(ctx).QueryRow(ctx, `SELECT password_hash FROM users WHERE id=$1 FOR UPDATE`, userID).Scan(&actual)
+	if err != nil {
+		return false, mapPGError(err)
+	}
+	if actual != current {
+		return false, nil
+	}
+	if current == replacement {
+		return true, nil
+	}
+	return true, r.UpdatePasswordHash(ctx, userID, replacement)
 }

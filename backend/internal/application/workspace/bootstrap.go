@@ -7,12 +7,13 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"vedam/lms/internal/domain/assessment"
 	"vedam/lms/internal/domain/catalog"
+	finance "vedam/lms/internal/domain/finance"
 	"vedam/lms/internal/domain/iam"
 	"vedam/lms/internal/domain/learning"
-	finance "vedam/lms/internal/domain/finance"
 )
 
 type BootstrapResponse struct {
@@ -29,7 +30,18 @@ type BootstrapResponse struct {
 	Progress          []int64                                  `json:"progress"`
 }
 
+const CatalogTTL = 10 * time.Minute
+
+type CatalogSnapshot struct {
+	Subjects         map[int][]catalog.Course
+	Lectures         map[string][]catalog.Lecture
+	Week             *catalog.WeekSchedule
+	DashboardNotices []catalog.Notice
+	DrawerNotices    []catalog.Notice
+}
+
 type BootstrapService struct {
+	LoadCatalog   func(context.Context) (CatalogSnapshot, error)
 	catalogRead   catalog.CatalogReader
 	scheduleRead  catalog.ScheduleRepository
 	noticeRead    catalog.NoticeRepository
@@ -68,27 +80,40 @@ func NewBootstrapService(
 	}
 }
 
-func (s *BootstrapService) Build(ctx context.Context, user *iam.User) (*BootstrapResponse, error) {
+func (s *BootstrapService) ReadCatalog(ctx context.Context) (CatalogSnapshot, error) {
 	subjects, err := s.catalogRead.ListCoursesBySemester(ctx)
 	if err != nil {
-		return nil, err
+		return CatalogSnapshot{}, err
 	}
-	lecturesByCourse, err := s.catalogRead.ListLecturesByCourse(ctx)
+	lectures, err := s.catalogRead.ListLecturesByCourse(ctx)
 	if err != nil {
-		return nil, err
+		return CatalogSnapshot{}, err
 	}
 	week, err := s.scheduleRead.GetWeekSchedule(ctx)
 	if err != nil {
-		return nil, err
+		return CatalogSnapshot{}, err
 	}
-	dashNotices, err := s.noticeRead.ListByPlacement(ctx, "dashboard")
+	dashboard, err := s.noticeRead.ListByPlacement(ctx, "dashboard")
+	if err != nil {
+		return CatalogSnapshot{}, err
+	}
+	drawer, err := s.noticeRead.ListByPlacement(ctx, "drawer")
+	if err != nil {
+		return CatalogSnapshot{}, err
+	}
+	return CatalogSnapshot{subjects, lectures, week, dashboard, drawer}, nil
+}
+
+func (s *BootstrapService) Build(ctx context.Context, user *iam.User) (*BootstrapResponse, error) {
+	load := s.LoadCatalog
+	if load == nil {
+		load = s.ReadCatalog
+	}
+	snapshot, err := load(ctx)
 	if err != nil {
 		return nil, err
 	}
-	drawerNotices, err := s.noticeRead.ListByPlacement(ctx, "drawer")
-	if err != nil {
-		return nil, err
-	}
+	subjects, lecturesByCourse, week, dashNotices, drawerNotices := snapshot.Subjects, snapshot.Lectures, snapshot.Week, snapshot.DashboardNotices, snapshot.DrawerNotices
 	submissions, err := s.subRead.ListForStudent(ctx, user.ID)
 	if err != nil {
 		return nil, err

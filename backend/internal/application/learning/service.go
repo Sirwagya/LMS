@@ -2,8 +2,13 @@ package learning
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"strconv"
 	"strings"
+	"time"
 
 	"vedam/lms/internal/domain/assessment"
 	"vedam/lms/internal/domain/catalog"
@@ -59,6 +64,10 @@ func NewService(
 }
 
 func (s *Service) ToggleProgress(ctx context.Context, userID string, lectureID int64, complete bool) error {
+	return s.SetProgress(ctx, userID, lectureID, complete, s.clk.Now())
+}
+
+func (s *Service) SetProgress(ctx context.Context, userID string, lectureID int64, complete bool, clientTime time.Time) error {
 	if _, err := s.catRead.GetLecture(ctx, lectureID); err != nil {
 		return err
 	}
@@ -78,7 +87,7 @@ func (s *Service) ToggleProgress(ctx context.Context, userID string, lectureID i
 			"complete":  complete,
 		})
 		target := userID
-		if _, err := s.outbox.AppendChangelog(txCtx, "user:"+userID, &target, "lecture_progress", "", "upsert", payload); err != nil {
+		if _, err := s.outbox.AppendChangelog(txCtx, "user:"+userID, &target, "lecture_progress", strconv.FormatInt(lectureID, 10), "upsert", payload); err != nil {
 			return err
 		}
 		return s.outbox.EnqueueEvent(txCtx, syncdomain.OutboxEvent{
@@ -122,7 +131,7 @@ func (s *Service) SubmitWrittenAssignment(ctx context.Context, in SubmitWrittenI
 
 	return s.tx.WithinTx(ctx, func(txCtx context.Context) error {
 		existing, err := s.subRepo.GetByUserAndAssignment(txCtx, in.UserID, a.ID)
-		if err != nil && !isNotFound(err) {
+		if err != nil && !errors.Is(err, errs.ErrNotFound) {
 			return err
 		}
 		if existing != nil && existing.Score != nil && *existing.Score != "" {
@@ -136,7 +145,8 @@ func (s *Service) SubmitWrittenAssignment(ctx context.Context, in SubmitWrittenI
 				return errs.New(errs.ErrValidation, "INVALID_FILENAME", "Provide a valid attachment filename.")
 			}
 			id := s.newID()
-			storageKey := "submissions/" + id + "/" + filename
+			storageKey := "submissions/" + id
+			digest := sha256.Sum256(in.FileBytes)
 			if err := s.assetBlob.Put(txCtx, storageKey, in.FileBytes); err != nil {
 				return err
 			}
@@ -150,6 +160,7 @@ func (s *Service) SubmitWrittenAssignment(ctx context.Context, in SubmitWrittenI
 				MimeType:   mime,
 				ByteSize:   int64(len(in.FileBytes)),
 				StorageKey: storageKey,
+				SHA256:     hex.EncodeToString(digest[:]),
 				CreatedAt:  s.clk.Now().UTC(),
 			}); err != nil {
 				return err
@@ -161,7 +172,7 @@ func (s *Service) SubmitWrittenAssignment(ctx context.Context, in SubmitWrittenI
 		if existing != nil {
 			subID = existing.ID
 		}
-		if err := s.subRepo.Upsert(txCtx, &assessment.Submission{
+		return s.subRepo.Upsert(txCtx, &assessment.Submission{
 			ID:           subID,
 			UserID:       in.UserID,
 			AssignmentID: a.ID,
@@ -170,17 +181,6 @@ func (s *Service) SubmitWrittenAssignment(ctx context.Context, in SubmitWrittenI
 			Filename:     filename,
 			AssetID:      assetID,
 			Created:      s.clk.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		}); err != nil {
-			return err
-		}
-
-		payload, _ := json.Marshal(map[string]any{"userId": in.UserID, "assignmentId": a.ID})
-		return s.outbox.EnqueueEvent(txCtx, syncdomain.OutboxEvent{
-			ID:          s.newID(),
-			AggregateID: in.UserID,
-			Topic:       "cache.invalidate.bootstrap",
-			Payload:     payload,
-			CreatedAt:   s.clk.Now().UTC(),
 		})
 	})
 }
@@ -189,25 +189,22 @@ func (s *Service) ListDiscussions(ctx context.Context, lectureID int64) ([]domai
 	return s.discRepo.ListForLecture(ctx, lectureID)
 }
 
-func (s *Service) PostDiscussion(ctx context.Context, userID string, lectureID int64, bodyText string) error {
+func (s *Service) PostDiscussion(ctx context.Context, userID string, lectureID int64, bodyText string) (string, error) {
 	if _, err := s.catRead.GetLecture(ctx, lectureID); err != nil {
-		return err
+		return "", err
 	}
 	trimmed := strings.TrimSpace(bodyText)
 	if trimmed == "" || len(trimmed) > 2000 {
-		return errs.New(errs.ErrValidation, "INVALID_BODY", "Message must be between 1 and 2000 characters.")
+		return "", errs.New(errs.ErrValidation, "INVALID_BODY", "Message must be between 1 and 2000 characters.")
 	}
 	now := s.clk.Now().UTC()
-	return s.discRepo.Create(ctx, &domain.Discussion{
-		ID:        s.newID(),
+	id := s.newID()
+	return id, s.discRepo.Create(ctx, &domain.Discussion{
+		ID:        id,
 		UserID:    userID,
 		LectureID: lectureID,
 		Body:      trimmed,
 		Created:   now.Format("2006-01-02T15:04:05.000Z"),
 		CreatedAt: now,
 	})
-}
-
-func isNotFound(err error) bool {
-	return err != nil && (err == errs.ErrNotFound || strings.Contains(err.Error(), "not found"))
 }

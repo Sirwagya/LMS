@@ -76,3 +76,15 @@ func mapPGError(err error) error {
 	}
 	return err
 }
+
+func (m *TxManager) WithinReadSnapshot(ctx context.Context, fn func(context.Context) error) error {
+	tx, err := m.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	if err := fn(context.WithValue(ctx, txKey{}, tx)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}

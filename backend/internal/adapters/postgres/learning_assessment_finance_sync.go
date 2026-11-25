@@ -3,7 +3,10 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"github.com/jackc/pgx/v5"
 	"maps"
+	"strconv"
 	"time"
 
 	"vedam/lms/internal/domain/assessment"
@@ -391,12 +394,16 @@ func (r *SubmissionRepo) GetByUserAndAssignment(ctx context.Context, userID, ass
 }
 
 func (r *SubmissionRepo) Upsert(ctx context.Context, sub *assessment.Submission) error {
-	_, err := r.tx.Querier(ctx).Exec(ctx, `
+	tag, err := r.tx.Querier(ctx).Exec(ctx, `
 		INSERT INTO submissions (id, user_id, assignment_id, course_code, answer, filename, asset_id, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
 		ON CONFLICT (user_id, assignment_id) DO UPDATE
-		SET answer = EXCLUDED.answer, filename = EXCLUDED.filename, asset_id = EXCLUDED.asset_id, updated_at = NOW()
+		SET answer = EXCLUDED.answer, filename = EXCLUDED.filename, asset_id = EXCLUDED.asset_id, created_at = NOW(), updated_at = NOW()
+        WHERE submissions.score IS NULL OR submissions.score = '' OR EXISTS (SELECT 1 FROM assignments WHERE id=EXCLUDED.assignment_id AND kind='coding')
 	`, sub.ID, sub.UserID, sub.AssignmentID, sub.Course, sub.Answer, sub.Filename, sub.AssetID)
+	if err == nil && tag.RowsAffected() == 0 {
+		return errs.New(errs.ErrAlreadyGraded, "ALREADY_GRADED", "Graded submissions cannot be changed.")
+	}
 	return mapPGError(err)
 }
 
@@ -641,7 +648,7 @@ func (r *SyncRepo) ClaimUnpublished(ctx context.Context, limit int) ([]syncdomai
 	rows, err := r.tx.Querier(ctx).Query(ctx, `
 		SELECT id, aggregate_id, topic, payload, created_at
 		FROM outbox_events WHERE published_at IS NULL
-		ORDER BY created_at ASC LIMIT $1
+		ORDER BY created_at ASC, id ASC LIMIT $1 FOR UPDATE SKIP LOCKED
 	`, limit)
 	if err != nil {
 		return nil, mapPGError(err)
@@ -715,3 +722,30 @@ func (r *SyncRepo) SaveMutation(ctx context.Context, key, userID string, respons
 }
 
 var _ = time.Now
+
+// Serialize changelog writers before allocating sequence values. Pull cursors
+// only advance past committed entries, so they cannot skip a late commit.
+func (r *SyncRepo) LockMutations(ctx context.Context) error {
+	_, err := r.tx.Querier(ctx).Exec(ctx, `SELECT pg_advisory_xact_lock(24851927)`)
+	return err
+}
+
+func (r *ProgressRepo) Version(ctx context.Context, userID string, lectureID int64) (int64, bool, int64, error) {
+	var version, timestamp int64
+	var complete bool
+	err := r.tx.Querier(ctx).QueryRow(ctx, `
+ SELECT seq, (payload->>'complete')::boolean,
+ COALESCE((payload->>'clientTimestamp')::bigint, floor(extract(epoch FROM updated_at)*1000)::bigint) FROM sync_changelog
+ WHERE target_user_id=$1 AND entity_type='lecture_progress' AND entity_id=$2
+ ORDER BY seq DESC LIMIT 1`, userID, strconv.FormatInt(lectureID, 10)).Scan(&version, &complete, &timestamp)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = r.tx.Querier(ctx).QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM lecture_progress WHERE user_id=$1 AND lecture_id=$2)`, userID, lectureID).Scan(&complete)
+	}
+	return version, complete, timestamp, err
+}
+
+func (r *CodingAttemptRepo) Result(ctx context.Context, userID, id string) (json.RawMessage, error) {
+	var result json.RawMessage
+	err := r.tx.Querier(ctx).QueryRow(ctx, `SELECT result_json FROM coding_attempts WHERE id=$1 AND user_id=$2`, id, userID).Scan(&result)
+	return result, mapPGError(err)
+}

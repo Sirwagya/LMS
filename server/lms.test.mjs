@@ -1,45 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { once } from "node:events";
+import { isolatedGoServer } from "../tests/go-server.mjs";
 
 test(
   "local LMS: roles, learning, persistence, files and simulated ledger",
   { timeout: 60000 },
   async () => {
-    const dir = mkdtempSync(join(tmpdir(), "vedam-test-")),
-      port = 31000 + Math.floor(Math.random() * 15000),
-      base = `http://127.0.0.1:${port}`;
-    let proc;
+    const server = await isolatedGoServer();
+    let base;
     async function start() {
-      proc = spawn(process.execPath, ["server/index.mjs"], {
-        env: { ...process.env, PORT: String(port), LMS_DATA_DIR: dir },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let errors = "";
-      proc.stderr.on("data", (d) => (errors += d));
-      await new Promise((resolve, reject) => {
-        const timer = setTimeout(
-          () => reject(new Error("Server start timeout " + errors)),
-          10000,
-        );
-        proc.stdout.once("data", () => {
-          clearTimeout(timer);
-          resolve();
-        });
-        proc.once("exit", (code) => {
-          clearTimeout(timer);
-          reject(new Error(`Server exited ${code}: ${errors}`));
-        });
-      });
+      base = await server.start();
     }
     async function stop() {
-      const done = once(proc, "exit");
-      proc.kill();
-      await done;
+      await server.stop();
     }
     async function req(path, method = "GET", data, cookie) {
       const r = await fetch(base + "/api" + path, {
@@ -556,8 +529,7 @@ test(
         401,
       );
     } finally {
-      if (proc?.exitCode === null) await stop();
-      rmSync(dir, { recursive: true, force: true });
+      await server.close();
     }
   },
 );

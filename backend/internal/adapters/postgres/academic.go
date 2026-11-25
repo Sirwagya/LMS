@@ -309,3 +309,9 @@ func (r *AcademicRepo) UpsertFaceBiometrics(ctx context.Context, rec academic.Fa
 	`, rec.PersonID, rec.Email, rec.HasFaceData, rec.FaceJSON, rec.Embedding)
 	return mapPGError(err)
 }
+
+func (r *AcademicRepo) CPRForUser(ctx context.Context, userID string) (int64, error) {
+	var id int64
+	err := r.tx.Querier(ctx).QueryRow(ctx, `SELECT cpr_id FROM campus_person_roles WHERE user_id=$1`, userID).Scan(&id)
+	return id, mapPGError(err)
+}

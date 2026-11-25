@@ -1,0 +1,243 @@
+package httpadapter
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"regexp"
+	"strings"
+
+	"github.com/google/uuid"
+	"vedam/lms/internal/domain/errs"
+	"vedam/lms/internal/domain/iam"
+)
+
+var (
+	emailPattern = regexp.MustCompile(`^[^\s@]+@[^\s@]+\.[^\s@]+$`)
+	profileImage = regexp.MustCompile(`^data:image/(png|jpeg|webp|gif);base64,`)
+)
+
+func (a *api) health(w http.ResponseWriter, r *http.Request) error {
+	status := 200
+	db, redis := "up", "up"
+	if a.PingDB(r.Context()) != nil {
+		db, status = "down", 503
+	}
+	if a.Redis.Ping(r.Context()).Err() != nil {
+		redis, status = "down", 503
+	}
+	writeJSON(w, status, map[string]any{"ok": status == 200, "db": db, "redis": redis})
+	return nil
+}
+func (a *api) cookie(w http.ResponseWriter, token string, age int) {
+	http.SetCookie(w, &http.Cookie{Name: "lms_session", Value: token, Path: "/", MaxAge: age, HttpOnly: true, Secure: a.CookieSecure, SameSite: http.SameSiteStrictMode})
+}
+func (a *api) createSession(ctx context.Context, u *iam.User) (string, error) {
+	token, err := a.Sessions.Create(ctx, u.ID, u.Role)
+	if err != nil {
+		return "", problem(503, "Session service unavailable.")
+	}
+	return token, nil
+}
+
+func (a *api) signedIn(w http.ResponseWriter, u *iam.User, token string, includeToken bool) error {
+	a.cookie(w, token, int(a.SessionTTL.Seconds()))
+	response := map[string]any{"user": u.Public()}
+	if includeToken {
+		response["token"] = token
+	}
+	writeJSON(w, 200, response)
+	return nil
+}
+func (a *api) login(w http.ResponseWriter, r *http.Request) error {
+	f := read(w, r)
+	email, password := strings.ToLower(f.text("email", "email", 254)), f.text("password", "password", 128)
+	if f.err != nil {
+		return f.err
+	}
+	ctx := r.Context()
+	u, err := a.Users.GetByEmail(ctx, email)
+	badLogin := problem(401, "Email or password is incorrect.")
+	if errors.Is(err, errs.ErrNotFound) {
+		return badLogin
+	}
+	if err != nil {
+		return err
+	}
+	valid, rehash, err := a.Hasher.Verify(password, u.PasswordHash)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return badLogin
+	}
+	replacement := u.PasswordHash
+	if rehash {
+		replacement, err = a.Hasher.Hash(password)
+		if err != nil {
+			return err
+		}
+	}
+	// Check the password again under a row lock before issuing the session. A
+	// concurrent password change can then revoke every session using the old hash.
+	var token string
+	if err := a.withCurrentPassword(ctx, u, replacement, func() error {
+		token, err = a.createSession(ctx, u)
+		return err
+	}, badLogin); err != nil {
+		return err
+	}
+	return a.signedIn(w, u, token, true)
+}
+func (a *api) withCurrentPassword(ctx context.Context, u *iam.User, replacement string, fn func() error, mismatch error) error {
+	return a.Tx.WithinTx(ctx, func(ctx context.Context) error {
+		current, err := a.Users.UpdatePasswordIfCurrent(ctx, u.ID, u.PasswordHash, replacement)
+		if err != nil {
+			return err
+		}
+		if !current {
+			return mismatch
+		}
+		return fn()
+	})
+}
+func (a *api) newUser(ctx context.Context, name, email, password string, role iam.Role) (*iam.User, error) {
+	hash, err := a.Hasher.Hash(password)
+	if err != nil {
+		return nil, err
+	}
+	user := &iam.User{ID: uuid.NewString(), Name: name, Email: email, Role: role, PasswordHash: hash, Version: 1}
+	if err := a.Users.Create(ctx, user); err != nil {
+		if errors.Is(err, errs.ErrConflict) {
+			err = problem(409, "Email already registered.")
+		}
+		return nil, err
+	}
+	return user, nil
+}
+func (a *api) register(w http.ResponseWriter, r *http.Request) error {
+	f := read(w, r)
+	name, email, password := f.text("name", "name", 100), strings.ToLower(f.text("email", "email", 254)), f.text("password", "password", 128)
+	if f.err != nil {
+		return f.err
+	}
+	if !emailPattern.MatchString(email) || textLength(password) < 10 {
+		return invalid("Use a valid email and a password with at least 10 characters.")
+	}
+	user, err := a.newUser(r.Context(), name, email, password, iam.RoleStudent)
+	if err != nil {
+		return err
+	}
+	token, err := a.createSession(r.Context(), user)
+	if err != nil {
+		return err
+	}
+	return a.signedIn(w, user, token, true)
+}
+func (a *api) logout(w http.ResponseWriter, r *http.Request) error {
+	if err := a.Sessions.RevokeAll(r.Context(), actor(r).UserID); err != nil {
+		return problem(503, "Session service unavailable.")
+	}
+	a.cookie(w, "", -1)
+	return ok(w, 200, nil)
+}
+func (a *api) password(w http.ResponseWriter, r *http.Request) error {
+	f := read(w, r)
+	current, next := f.text("current", "current password", 128), f.text("next", "new password", 128)
+	if f.err != nil {
+		return f.err
+	}
+	ctx := r.Context()
+	u, err := a.Users.GetByID(ctx, actor(r).UserID)
+	if err != nil {
+		return err
+	}
+	valid, _, err := a.Hasher.Verify(current, u.PasswordHash)
+	if err != nil {
+		return err
+	}
+	mismatch := invalid("Current password is incorrect.")
+	if !valid {
+		return mismatch
+	}
+	if textLength(next) < 10 {
+		return invalid("Use at least 10 characters.")
+	}
+	replacement, err := a.Hasher.Hash(next)
+	if err != nil {
+		return err
+	}
+	var token string
+	if err := a.withCurrentPassword(ctx, u, replacement, func() error {
+		if err := a.Sessions.RevokeAll(ctx, u.ID); err != nil {
+			return problem(503, "Session service unavailable.")
+		}
+		token, err = a.createSession(ctx, u)
+		return err
+	}, mismatch); err != nil {
+		return err
+	}
+	return a.signedIn(w, u, token, strings.HasPrefix(r.URL.Path, "/api/v1/"))
+}
+func validateProfile(raw json.RawMessage) (string, error) {
+	f := &fields{}
+	if json.Unmarshal(raw, &f.values) != nil || f.values == nil {
+		return "", invalid("Profile required.")
+	}
+	name := f.text("name", "name", 100)
+	if f.err != nil {
+		return "", f.err
+	}
+	for _, key := range []string{"avatarUrl", "bannerUrl"} {
+		if value := f.optional(key); value != "" && !profileImage.MatchString(value) {
+			return "", invalid("Upload a PNG, JPEG, WebP or GIF image.")
+		}
+	}
+	var platforms []struct {
+		URL string `json:"url"`
+	}
+	if raw := f.values["platforms"]; len(raw) > 0 && json.Unmarshal(raw, &platforms) != nil {
+		return "", invalid("Invalid profile platforms.")
+	}
+	for _, p := range platforms {
+		if p.URL != "" && !strings.HasPrefix(p.URL, "https://") && !strings.HasPrefix(p.URL, "http://") {
+			return "", invalid("Profile links must begin with https:// or http://.")
+		}
+	}
+	return name, nil
+}
+func (a *api) profile(w http.ResponseWriter, r *http.Request) error {
+	f := read(w, r)
+	if f.err != nil {
+		return f.err
+	}
+	raw := f.values["profile"]
+	name, err := validateProfile(raw)
+	if err != nil {
+		return err
+	}
+	var expected *int64
+	if version := f.values["baseVersion"]; len(version) > 0 && json.Unmarshal(version, &expected) != nil {
+		return invalid("Invalid base version.")
+	}
+	user := actor(r).UserID
+	var version int64
+	err = a.mutate(r.Context(), user, func(ctx context.Context) error {
+		var err error
+		version, err = a.updateProfile(ctx, user, name, raw, expected)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "version": version})
+	return nil
+}
+func (a *api) updateProfile(ctx context.Context, user, name string, raw json.RawMessage, expected *int64) (int64, error) {
+	version, err := a.Users.UpdateProfile(ctx, user, name, raw, expected)
+	if err != nil {
+		return 0, err
+	}
+	return version, a.changed(ctx, user, "profile", user, "sync.available", map[string]any{"id": user, "profile": raw, "version": version})
+}

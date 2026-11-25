@@ -32,6 +32,7 @@ type PublicUser struct {
 	Name    string          `json:"name"`
 	Role    Role            `json:"role"`
 	Profile json.RawMessage `json:"profile"`
+	Version int64           `json:"version,omitempty"`
 }
 
 func (u User) Public() PublicUser {
@@ -45,6 +46,7 @@ func (u User) Public() PublicUser {
 		Name:    u.Name,
 		Role:    u.Role,
 		Profile: profile,
+		Version: u.Version,
 	}
 }
 

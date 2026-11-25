@@ -4,12 +4,12 @@ import (
 	"context"
 	"flag"
 	"log"
-	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	cryptoadapter "vedam/lms/internal/adapters/crypto"
+	"vedam/lms/internal/runtime"
 	"vedam/lms/internal/seed"
 	"vedam/lms/migrations"
 )
@@ -18,14 +18,14 @@ func main() {
 	reset := flag.Bool("reset", false, "drop and recreate schema before seeding")
 	flag.Parse()
 
-	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		dbURL = "postgres://lms:lms_local_dev@127.0.0.1:5432/lms_dev?sslmode=disable"
+	cfg, err := runtime.LoadConfig()
+	if err != nil {
+		log.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, dbURL)
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("connect postgres: %v", err)
 	}
