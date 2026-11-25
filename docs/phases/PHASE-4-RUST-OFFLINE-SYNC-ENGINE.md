@@ -3,6 +3,15 @@
 > **Prerequisite**: [Phase 2](file:///Users/sirwagyashekhar/Projects/LMS/docs/phases/PHASE-2-GO-API-REDIS-AND-PARITY.md) (`/api/v1/sync/pull` & `/api/v1/sync/push` live on Go backend).
 > **Phase Goal**: Build `crates/lms-sync`, a standalone Rust + SQLite WAL library powering sub-millisecond local UI reads, crash-safe `sync_outbox` mutation queuing, incremental cursor synchronization, and deterministic conflict resolution when offline on macOS.
 
+
+## Implementation status
+
+The workspace now includes `lms-sync`. The SQLite file belongs to one account and preserves optimistic profile, progress and discussion edits, conflicts, and written and code drafts across restarts. The reqwest client uses Phase 2's per-item idempotency keys. The engine also exposes status updates and a wake signal for the host's reconnect and SSE handling.
+
+Profile, progress and discussion edits can sync against the existing Go API. Queued written and coding submissions still need a server contract that can safely replay submissions and enforce the grading lock. SSE connection ownership and UI wiring are part of the Phase 5 host.
+
+Run `cargo test -p lms-sync --locked` for local tests. For the end-to-end case, set `LMS_SYNC_TEST_URL` to the origin of a seeded disposable Go API and run `cargo test -p lms-sync --locked --test live_api -- --ignored`.
+
 ---
 
 ## 1. Sync Lifecycle & Sequence Architecture
