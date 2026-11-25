@@ -303,6 +303,15 @@ impl SqliteStore {
         )?;
         Ok(())
     }
+
+    /// Clear pending retry timers so a manual sync immediately attempts delivery.
+    pub fn clear_retry_schedule(&self) -> Result<(), SyncError> {
+        self.db()?.execute(
+            "UPDATE sync_outbox SET next_retry_at=NULL WHERE next_retry_at IS NOT NULL",
+            [],
+        )?;
+        Ok(())
+    }
 }
 
 fn now_ms() -> i64 {
