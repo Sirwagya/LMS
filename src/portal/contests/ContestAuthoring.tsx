@@ -1,8 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../api";
+import { ContestIntegrityReview } from "./ContestIntegrityReview";
 import { ContestQuestionEditor } from "./ContestQuestions";
 import { RosterPicker } from "./RosterPicker";
 import { contestTime, newQuestion, type ContestDraft, type ContestPage, type ContestRecord } from "./types";
+import { useContestFeatures } from "./useContestsEnabled";
 
 type Editor = { draft: ContestDraft; record?: ContestRecord };
 
@@ -31,6 +33,8 @@ export function ContestAuthoring() {
   const [message, setMessage] = useState("");
   const [reason, setReason] = useState("");
   const [preview, setPreview] = useState(false);
+  const [integrityOpen, setIntegrityOpen] = useState(false);
+  const { integrityEnabled } = useContestFeatures();
 
   useEffect(() => {
     let current = true;
@@ -80,6 +84,7 @@ export function ContestAuthoring() {
       await api(`${path}/${action}`, "POST", { revision: record.revision, reason });
       setVersion((value) => value + 1);
       setEditor(null);
+      setIntegrityOpen(false);
       setReason("");
       setMessage(action === "publish" ? "Contest published." : "Contest cancelled.");
     });
@@ -98,6 +103,7 @@ export function ContestAuthoring() {
             if (dirty && !window.confirm("Discard unsaved contest edits?")) return;
             setEditor(editorFor());
             setPreview(false);
+            setIntegrityOpen(false);
             setError(""); setMessage(""); setReason("");
           }}>New contest</button>
         </div>
@@ -114,6 +120,7 @@ export function ContestAuthoring() {
                   const detail = await api<ContestRecord>(`/staff/contests/${contest.id}`);
                   setEditor(editorFor(detail));
                   setPreview(false);
+                  setIntegrityOpen(false);
                   setReason("");
                 });
               }}>{contest.title}</button>
@@ -137,8 +144,23 @@ export function ContestAuthoring() {
               {record.cancellationReason && <> · {record.cancellationReason}</>}
             </p>
           )}
-          <button className="btn btn-secondary mt-3" type="button" aria-expanded={preview}
-            onClick={() => setPreview(!preview)}>{preview ? "Hide student preview" : "Preview student view"}</button>
+          <div className="inline-actions mt-3">
+            <button className="btn btn-secondary" type="button" aria-expanded={preview}
+              onClick={() => setPreview(!preview)}>{preview ? "Hide student preview" : "Preview student view"}</button>
+            {record && (record.status === "published" || record.status === "cancelled") && integrityEnabled && (
+              <button
+                className="btn btn-secondary"
+                type="button"
+                aria-expanded={integrityOpen}
+                onClick={() => setIntegrityOpen((open) => !open)}
+              >
+                {integrityOpen ? "Hide integrity & replay" : "Integrity & Replay"}
+              </button>
+            )}
+          </div>
+          {integrityOpen && record && (record.status === "published" || record.status === "cancelled") && integrityEnabled && (
+            <ContestIntegrityReview key={record.id} contestId={record.id} />
+          )}
           {preview && (
             <section className="mt-4 space-y-3" aria-label="Student preview">
               <p className="whitespace-pre-wrap">{draft.instructions}</p>
