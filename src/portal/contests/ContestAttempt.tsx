@@ -4,15 +4,28 @@ import { useSession } from "../session";
 import { CodeEditor } from "../coding/CodeEditor";
 import type { Language } from "../coding/types";
 import { contestTime } from "./types";
-import { useContestAttempt, type Answer, type Question } from "./useContestAttempt";
+import { useContestAttempt, type Answer, type CodingSubmission, type Question } from "./useContestAttempt";
 import "./contestAttempt.css";
+
+const gradingMessage = {
+  grading: "Grading in progress.",
+  awaiting_release: "Grading complete. Results are awaiting release.",
+  needs_review: "A judge error needs review before results can be released.",
+};
+const codingStatus: Record<CodingSubmission["status"], string> = {
+  queued: "Queued",
+  judging: "Judging",
+  accepted: "Accepted",
+  rejected: "Not accepted",
+  failed: "Judge error",
+};
 
 export function ContestAttempt({ id }: { id: string }) {
   const { user } = useSession();
   const [selected, setSelected] = useState(0);
   const [flags, setFlags] = useState<Set<number>>(() => new Set());
   const [review, setReview] = useState(false);
-  const { view, answers, dirty, saving, busy, localDurable, error, sizeError, remaining, open, flush, edit } = useContestAttempt(id, user.id);
+  const { view, answers, dirty, saving, busy, localDurable, error, sizeError, remaining, open, flush, edit, submitCode, submittingCode, codeError } = useContestAttempt(id, user.id);
   const question = view?.questions?.[selected];
   const answer = answers[selected];
   const locked = busy || remaining === 0 || error.startsWith("Saved answers changed") || error.startsWith("Your saved answers changed");
@@ -64,6 +77,7 @@ export function ContestAttempt({ id }: { id: string }) {
           <h2>Submission received</h2>
           <p>{view.finishReason === "expired" ? "The deadline passed and the server submitted your last saved answers." : "Your answers were submitted."}</p>
           {view.submittedAt && <p>Submitted {contestTime(view.submittedAt)} · {Object.keys(view.answers ?? {}).length} answered</p>}
+          {view.gradingStatus && <p role="status">{gradingMessage[view.gradingStatus]}</p>}
           <p className="contest-receipt">Receipt {view.attemptId}</p>
         </div>
       )}
@@ -90,7 +104,8 @@ export function ContestAttempt({ id }: { id: string }) {
                   <h2>Review and submit</h2>
                   <p>{Object.keys(answers).length} of {view.questions?.length} answered. {flags.size} flagged for review.</p>
                   <p>Submitting ends your attempt.</p>
-                  <button className="btn btn-primary" disabled={locked || saving || !!sizeError} onClick={() => void flush(true)}>Submit attempt</button>
+                  {view.officialCoding && <p>{view.codingSubmissions?.length ?? 0} official coding submissions. Only official submissions count for coding.</p>}
+                  <button className="btn btn-primary" disabled={locked || saving || submittingCode || !!sizeError} onClick={() => void flush(true)}>Submit attempt</button>
                 </>
               ) : (
                 <>
@@ -107,7 +122,13 @@ export function ContestAttempt({ id }: { id: string }) {
                       ))}
                     </fieldset>
                   ) : (
-                    <CodingQuestion key={selected} question={question} answer={answer} locked={locked} edit={(next) => edit(selected, next)} />
+                    <CodingQuestion key={selected} question={question} answer={answer} locked={locked}
+                      edit={(next) => edit(selected, next)}
+                      official={view.officialCoding}
+                      submissions={view.codingSubmissions?.filter((submission) => submission.questionIndex === selected)}
+                      submitting={submittingCode} submitDisabled={saving}
+                      submit={() => void submitCode(selected)}
+                    />
                   )}
                   <button className="btn btn-secondary" aria-pressed={flags.has(selected)} onClick={() => setFlags((previous) => {
                     const next = new Set(previous);
@@ -117,7 +138,8 @@ export function ContestAttempt({ id }: { id: string }) {
                   })}>Flag for review</button>
                 </>
               )}
-              {dirty && !locked && <button className="btn btn-secondary" disabled={saving || !!sizeError} onClick={() => void flush(false)}>Save now</button>}
+              {codeError && <p role="alert">{codeError}</p>}
+              {dirty && !locked && <button className="btn btn-secondary" disabled={saving || submittingCode || !!sizeError} onClick={() => void flush(false)}>Save now</button>}
             </div>
           </div>
         </>
@@ -126,11 +148,18 @@ export function ContestAttempt({ id }: { id: string }) {
   );
 }
 
-function CodingQuestion({ question, answer, locked, edit }: {
+function CodingQuestion({
+  question, answer, locked, edit, official, submissions, submitting, submitDisabled, submit,
+}: {
   question: Question;
   answer?: Answer;
   locked: boolean;
   edit: (answer: Answer) => void;
+  official: boolean;
+  submissions?: CodingSubmission[];
+  submitting: boolean;
+  submitDisabled: boolean;
+  submit: () => void;
 }) {
   const draft = answer && "language" in answer ? answer : { language: "python" as const, source: "" };
   return (
@@ -149,6 +178,22 @@ function CodingQuestion({ question, answer, locked, edit }: {
       </select></label>
       {locked ? <pre aria-label="Saved code">{draft.source}</pre> : (
         <CodeEditor source={draft.source} language={draft.language} onChange={(source) => edit({ ...draft, source })} />
+      )}
+      {official && (
+        <>
+          <p>Send this version to the judge before the deadline.</p>
+          <button className="btn btn-primary" onClick={submit}
+            disabled={locked || submitDisabled || submitting || !draft.source.trim() || draft.source.includes("\0") || new TextEncoder().encode(draft.source).length > 32 * 1024}>
+            {submitting ? "Submitting to judge…" : "Submit code to judge"}
+          </button>
+        </>
+      )}
+      {!!submissions?.length && (
+        <ul className="space-y-2" aria-label="Official coding submissions" aria-live="polite">
+          {submissions.map((submission) => (
+            <li key={submission.id}>{contestTime(submission.submittedAt)} · {codingStatus[submission.status]}</li>
+          ))}
+        </ul>
       )}
     </div>
   );

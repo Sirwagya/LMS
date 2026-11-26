@@ -12,6 +12,12 @@ export type Question = {
   choices?: string[];
   examples?: { input: string; expected: string }[];
 };
+export type CodingSubmission = {
+  id: string;
+  questionIndex: number;
+  submittedAt: string;
+  status: "queued" | "judging" | "accepted" | "rejected" | "failed";
+};
 type Attempt = ContestSummary & {
   instructions: string;
   state: "ready" | "upcoming" | "closed" | "cancelled" | "occupied" | "active" | "submitted";
@@ -24,6 +30,10 @@ type Attempt = ContestSummary & {
   revision: number;
   answers: Answers | null;
   questions?: Question[];
+  officialCoding: boolean;
+  codingSubmissions?: CodingSubmission[];
+  codingSubmissionId?: string;
+  gradingStatus?: "grading" | "awaiting_release" | "needs_review";
 };
 type Checkpoint = {
   attemptId: string;
@@ -32,6 +42,7 @@ type Checkpoint = {
   answers: Answers;
   pending?: Answers;
 };
+type PendingCode = { fingerprint: string; requestId: string };
 type Control = "state" | "start" | "takeover";
 
 function localRead(key: string) {
@@ -94,6 +105,9 @@ export function useContestAttempt(id: string, userId: string) {
   const [view, setView] = useState<Attempt | null>(null);
   const [answers, setAnswers] = useState<Answers>({});
   const [dirty, setDirty] = useState(false);
+  const [submittingCode, setSubmittingCode] = useState(false);
+  const [codeError, setCodeError] = useState<string | null>(null);
+  const pendingCode = useRef(new Map<number, PendingCode>());
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
   const [localDurable, setLocalDurable] = useState(true);
@@ -127,11 +141,18 @@ export function useContestAttempt(id: string, userId: string) {
     }
   }, []);
 
-  const request = useCallback(async (action: string, extra?: object) => {
+  const request = useCallback(async (action: string, extra?: object, refreshFrom?: Attempt) => {
     const started = performance.now();
     const result = await api<Attempt>(`/contests/${id}/attempt`, "POST", { action, deviceId, ...extra });
-    if (mounted.current) apply(result, started);
-    return result;
+    if (!mounted.current) return null;
+    if (refreshFrom && (inFlight.current || current.current !== refreshFrom)) return null;
+    const snapshot = refreshFrom && result.state === "active" && result.revision === refreshFrom.revision
+      ? { ...result, answers: refreshFrom.answers }
+      : result;
+    // A status-only poll leaves the active editing baseline to the write path.
+    if (refreshFrom && result.state === "active" && result.revision !== refreshFrom.revision) return null;
+    apply(snapshot, started);
+    return snapshot;
   }, [apply, deviceId, id]);
 
   const open = useCallback(async (action: Control, discard = false) => {
@@ -141,7 +162,7 @@ export function useContestAttempt(id: string, userId: string) {
     setError("");
     try {
       const result = await request(action, { lease: current.current?.lease });
-      if (!mounted.current) return;
+      if (!result) return;
       const saved = result.answers ?? {};
       if (result.state === "active" && result.attemptId) {
         const local = discard ? null : checkpoint.current ?? readCheckpoint(storageKey);
@@ -186,7 +207,7 @@ export function useContestAttempt(id: string, userId: string) {
       const write = async (action: "save" | "submit", next: Checkpoint, snapshot: Answers) => {
         saveCheckpoint({ ...next, pending: snapshot }, current.current?.answers ?? {});
         const result = await request(action, { lease: next.lease, revision: next.revision, answers: snapshot });
-        if (!mounted.current) return;
+        if (!result) return;
         if (result.state === "active" && checkpoint.current) {
           saveCheckpoint({ ...checkpoint.current, revision: result.revision, pending: undefined }, result.answers ?? {});
         } else if (result.state === "submitted" || result.state === "cancelled") {
@@ -211,6 +232,67 @@ export function useContestAttempt(id: string, userId: string) {
     }
   }, [request, saveCheckpoint]);
 
+  const submitCode = useCallback(async (index: number) => {
+    const active = current.current;
+    const draft = checkpoint.current?.answers[index];
+    if (inFlight.current || active?.state !== "active" || !active.officialCoding || !draft ||
+        !("source" in draft) || !draft.source.trim() || sourceLimit({ [index]: draft }) || secondsUntil(expires.current) === 0) return;
+    inFlight.current = true;
+    setSubmittingCode(true);
+    setCodeError(null);
+    const key = `${storageKey}:official:${active.attemptId}:${active.lease}:${index}`;
+    try {
+      const bytes = new TextEncoder().encode(JSON.stringify([draft.language, draft.source]));
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      const fingerprint = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+      if (!mounted.current) return;
+      let pending = pendingCode.current.get(index);
+      const cached = localRead(key);
+      if (!pending && cached) pending = JSON.parse(cached) as PendingCode;
+      if (pending?.fingerprint !== fingerprint) pending = { fingerprint, requestId: crypto.randomUUID() };
+      pendingCode.current.set(index, pending);
+      localWrite(key, JSON.stringify(pending));
+
+      const result = await request("code", { lease: active.lease, questionIndex: index, requestId: pending.requestId, ...draft });
+      if (!result) return;
+      if (result.codingSubmissionId || result.state !== "active") {
+        pendingCode.current.delete(index);
+        localWrite(key, null);
+      }
+      if (result.state === "submitted" || result.state === "cancelled") {
+        saveCheckpoint(null, result.answers ?? {});
+      }
+    } catch (e) {
+      setCodeError((e as Error).message);
+    } finally {
+      inFlight.current = false;
+      setSubmittingCode(false);
+    }
+  }, [request, saveCheckpoint, storageKey]);
+
+  const watchingGrade = view?.gradingStatus === "grading" ||
+    !!view?.codingSubmissions?.some(({ status }) => status === "queued" || status === "judging");
+  useEffect(() => {
+    if (!watchingGrade) return;
+    let polling = false;
+    const timer = window.setInterval(async () => {
+      const previous = current.current;
+      if (!previous || inFlight.current || polling) return;
+      polling = true;
+      try {
+        const result = await request("grading", undefined, previous);
+        if (result && (result.state === "submitted" || result.state === "cancelled")) {
+          saveCheckpoint(null, result.answers ?? {});
+        }
+      } catch {
+        // Keep the last known result and check again on the next poll.
+      } finally {
+        polling = false;
+      }
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [request, saveCheckpoint, watchingGrade]);
+
   useEffect(() => {
     if (view?.state !== "active") return;
     const tick = window.setInterval(() => setRemaining(secondsUntil(expires.current)), 250);
@@ -218,20 +300,20 @@ export function useContestAttempt(id: string, userId: string) {
   }, [view?.state]);
 
   useEffect(() => {
-    if (view?.state !== "active" || busy || saving || error) return;
+    if (view?.state !== "active" || busy || saving || submittingCode || error) return;
     if (remaining === 0) {
       const refresh = window.setTimeout(() => void open("state"), 500);
       return () => window.clearTimeout(refresh);
     }
-  }, [view, busy, saving, error, remaining, open]);
+  }, [view, busy, saving, submittingCode, error, remaining, open]);
 
   useEffect(() => {
-    if (view?.state !== "active" || !dirty || saving || busy || error || sizeError) return;
+    if (view?.state !== "active" || !dirty || saving || busy || submittingCode || error || sizeError) return;
     const timeout = window.setTimeout(() => {
       if (secondsUntil(expires.current) > 0) void flush(false);
     }, 850);
     return () => window.clearTimeout(timeout);
-  }, [view?.state, dirty, saving, busy, error, sizeError, flush]);
+  }, [view?.state, dirty, saving, busy, submittingCode, error, sizeError, flush]);
 
   useEffect(() => {
     if (view?.state !== "active" || busy || saving || !error.startsWith("Server unavailable")) return;
@@ -254,5 +336,8 @@ export function useContestAttempt(id: string, userId: string) {
     saveCheckpoint({ ...draft, answers: next }, current.current?.answers ?? {});
   }
 
-  return { view, answers, dirty, saving, busy, localDurable, error, sizeError, remaining, open, flush, edit };
+  return {
+    view, answers, dirty, saving, busy, localDurable, error, sizeError, remaining,
+    open, flush, edit, submitCode, submittingCode, codeError,
+  };
 }
