@@ -46,6 +46,9 @@ func (rt *Runtime) Work(ctx context.Context) {
 				wg.Go(func() { rt.judgeContests(ctx) })
 			}
 		}
+		if rt.Config.ContestIntegrity {
+			wg.Go(func() { rt.purgeContestEvidence(ctx) })
+		}
 	}
 	wg.Wait()
 }
@@ -63,6 +66,19 @@ func (rt *Runtime) expireContestAttempts(ctx context.Context) {
 		if err != nil || count < batch {
 			pause(ctx, 2*time.Second)
 		}
+	}
+}
+
+func (rt *Runtime) purgeContestEvidence(ctx context.Context) {
+	repo := postgres.NewContestIntegrityRepo(rt.Tx)
+	for ctx.Err() == nil {
+		sweep, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, err := repo.PurgeExpiredEvidence(sweep)
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			rt.Log.Warn("contest evidence retention sweep failed", "err", err)
+		}
+		pause(ctx, 15*time.Minute)
 	}
 }
 

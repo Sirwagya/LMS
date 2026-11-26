@@ -18,14 +18,14 @@ import (
 const defaultDBURL = "postgres://lms:lms_local_dev@127.0.0.1:5432/lms_dev?sslmode=disable"
 
 type Config struct {
-	Addr, DatabaseURL, RedisURL, Assets, Web, Grader  string
-	CookieSecure, SessionSliding                      bool
-	SessionTTL                                        time.Duration
-	Production                                        bool
-	ContestAuthoring, ContestAttempts, ContestGrading bool
-	ContestJudgeURL, ContestJudgeToken                string
-	PublicOrigin                                      string
-	TrustedProxies                                    []netip.Prefix
+	Addr, DatabaseURL, RedisURL, Assets, Web, Grader                    string
+	CookieSecure, SessionSliding                                        bool
+	SessionTTL                                                          time.Duration
+	Production                                                          bool
+	ContestAuthoring, ContestAttempts, ContestGrading, ContestIntegrity bool
+	ContestJudgeURL, ContestJudgeToken                                  string
+	PublicOrigin                                                        string
+	TrustedProxies                                                      []netip.Prefix
 }
 
 func LoadConfig() (Config, error) {
@@ -130,6 +130,10 @@ func LoadConfig() (Config, error) {
 	if err != nil || (grading && !attempts) {
 		return Config{}, fmt.Errorf("LMS_CONTEST_GRADING must be a boolean and requires LMS_CONTEST_ATTEMPTS=true when enabled")
 	}
+	integrity, err := strconv.ParseBool(get("LMS_CONTEST_INTEGRITY", "false"))
+	if err != nil || (integrity && !attempts) {
+		return Config{}, fmt.Errorf("LMS_CONTEST_INTEGRITY must be a boolean and requires LMS_CONTEST_ATTEMPTS=true when enabled")
+	}
 	judgeURL, judgeToken := get("LMS_CONTEST_JUDGE_URL", ""), get("LMS_CONTEST_JUDGE_TOKEN", "")
 	if grading || judgeURL != "" || judgeToken != "" {
 		if err := validateContestJudge(judgeURL, judgeToken, production); err != nil {
@@ -149,7 +153,7 @@ func LoadConfig() (Config, error) {
 		graderPath = ""
 	}
 	return Config{
-		Addr: addr, DatabaseURL: databaseURL, RedisURL: redisURL, Production: production, ContestAuthoring: contestAuthoring, ContestAttempts: attempts, ContestGrading: grading,
+		Addr: addr, DatabaseURL: databaseURL, RedisURL: redisURL, Production: production, ContestAuthoring: contestAuthoring, ContestAttempts: attempts, ContestGrading: grading, ContestIntegrity: integrity,
 		ContestJudgeURL: judgeURL, ContestJudgeToken: judgeToken, PublicOrigin: publicOrigin, TrustedProxies: proxies,
 		Assets: path("ASSET_STORAGE_DIR", "backend/.data/assets"), Web: path("WEB_DIST_DIR", "dist"),
 		Grader: graderPath, CookieSecure: secure, SessionSliding: sliding, SessionTTL: time.Duration(hours) * time.Hour,

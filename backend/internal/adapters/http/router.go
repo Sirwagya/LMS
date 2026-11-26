@@ -98,21 +98,22 @@ type Dependencies struct {
 	Discussions interface {
 		GetByID(context.Context, string) (learning.Discussion, error)
 	}
-	Progress        Progress
-	Invoices        Invoices
-	Academic        Academic
-	Sync            Sync
-	AssetMeta       catalog.AssetMetadataRepository
-	Assets          *storage.LocalAssets
-	Bootstrap       *workspace.BootstrapService
-	Learning        *learningapp.Service
-	Staff           *staff.Service
-	Payments        *finance.PayInvoiceService
-	Coding          CodingService
-	Queue           *redisadapter.Queue
-	Contests        *contestapp.Service
-	ContestRepo     contest.Repository
-	ContestAttempts contest.AttemptRepository
+	Progress         Progress
+	Invoices         Invoices
+	Academic         Academic
+	Sync             Sync
+	AssetMeta        catalog.AssetMetadataRepository
+	Assets           *storage.LocalAssets
+	Bootstrap        *workspace.BootstrapService
+	Learning         *learningapp.Service
+	Staff            *staff.Service
+	Payments         *finance.PayInvoiceService
+	Coding           CodingService
+	Queue            *redisadapter.Queue
+	Contests         *contestapp.Service
+	ContestRepo      contest.Repository
+	ContestAttempts  contest.AttemptRepository
+	ContestIntegrity contest.IntegrityRepository
 }
 
 type api struct {
@@ -207,9 +208,26 @@ func New(d Dependencies) http.Handler {
 				a.mount(mux, prefix, rt)
 			}
 		}
+		if d.ContestIntegrity != nil {
+			for _, rt := range []route{
+				{"GET", "/contests/{id}/appeal", student, a.contestListAppeals},
+				{"POST", "/contests/{id}/appeal", student, a.contestSubmitAppeal},
+				{"GET", "/staff/contests/{id}/integrity", staffOnly, a.contestReviewQueue},
+				{"GET", "/staff/contests/{id}/attempts/{attemptId}/replay", staffOnly, a.contestAttemptReplay},
+				{"POST", "/staff/contests/{id}/reviewers", staffOnly, a.contestAssignReviewer},
+				{"POST", "/staff/contests/{id}/attempts/{attemptId}/review", staffOnly, a.contestDecideReview},
+				{"POST", "/staff/contests/{id}/appeals/{appealId}/resolve", staffOnly, a.contestResolveAppeal},
+				{"POST", "/staff/contests/{id}/similarity", staffOnly, a.contestComputeSimilarity},
+			} {
+				a.mount(mux, prefix, rt)
+			}
+		}
 	}
 	if d.ContestAttempts != nil {
 		a.mount(mux, "/api/v1", route{"POST", "/contests/{id}/attempt", student, a.contestAttempt})
+		if d.ContestIntegrity != nil {
+			a.mount(mux, "/api/v1", route{"POST", "/contests/{id}/events", student, a.contestIngestEvents})
+		}
 	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { a.failure(w, r, problem(404, "Endpoint not found.")) })
 	if d.Web != nil {
