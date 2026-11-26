@@ -1247,6 +1247,7 @@ fn is_contest_native_path(path: &str) -> bool {
         .and_then(|rest| {
             rest.strip_suffix("/attempt")
                 .or_else(|| rest.strip_suffix("/events"))
+                .or_else(|| rest.strip_suffix("/media"))
         })
         .is_some_and(|id| !id.is_empty() && !id.contains('/') && !id.contains('?'))
 }
@@ -1667,6 +1668,7 @@ mod tests {
     fn contest_native_path_matches_only_attempt_and_events() {
         assert!(is_contest_native_path("/contests/sample/attempt"));
         assert!(is_contest_native_path("/contests/sample/events"));
+        assert!(is_contest_native_path("/contests/sample/media"));
 
         for excluded in [
             "/contests/sample/report",
@@ -1678,6 +1680,9 @@ mod tests {
             "/contests//attempt",
             "/contests/a/b/attempt",
             "/contests/sample/events?x=1",
+            "/contests//media",
+            "/contests/a/b/media",
+            "/contests/sample/media?x=1",
         ] {
             assert!(
                 !is_contest_native_path(excluded),
