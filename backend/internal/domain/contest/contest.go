@@ -48,6 +48,7 @@ type Summary struct {
 	ClosesAt        time.Time `json:"closesAt"`
 	DurationMinutes int       `json:"durationMinutes"`
 	Status          string    `json:"status"`
+	AttemptState    string    `json:"attemptState,omitempty"`
 }
 
 type Record struct {

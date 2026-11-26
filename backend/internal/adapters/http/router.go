@@ -98,20 +98,21 @@ type Dependencies struct {
 	Discussions interface {
 		GetByID(context.Context, string) (learning.Discussion, error)
 	}
-	Progress    Progress
-	Invoices    Invoices
-	Academic    Academic
-	Sync        Sync
-	AssetMeta   catalog.AssetMetadataRepository
-	Assets      *storage.LocalAssets
-	Bootstrap   *workspace.BootstrapService
-	Learning    *learningapp.Service
-	Staff       *staff.Service
-	Payments    *finance.PayInvoiceService
-	Coding      CodingService
-	Queue       *redisadapter.Queue
-	Contests    *contestapp.Service
-	ContestRepo contest.Repository
+	Progress        Progress
+	Invoices        Invoices
+	Academic        Academic
+	Sync            Sync
+	AssetMeta       catalog.AssetMetadataRepository
+	Assets          *storage.LocalAssets
+	Bootstrap       *workspace.BootstrapService
+	Learning        *learningapp.Service
+	Staff           *staff.Service
+	Payments        *finance.PayInvoiceService
+	Coding          CodingService
+	Queue           *redisadapter.Queue
+	Contests        *contestapp.Service
+	ContestRepo     contest.Repository
+	ContestAttempts contest.AttemptRepository
 }
 
 type api struct {
@@ -206,6 +207,9 @@ func New(d Dependencies) http.Handler {
 				a.mount(mux, prefix, rt)
 			}
 		}
+	}
+	if d.ContestAttempts != nil {
+		a.mount(mux, "/api/v1", route{"POST", "/contests/{id}/attempt", student, a.contestAttempt})
 	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { a.failure(w, r, problem(404, "Endpoint not found.")) })
 	if d.Web != nil {

@@ -16,7 +16,7 @@ func NewContestAuthoringRepo(tx *TxManager) *ContestAuthoringRepo {
 
 func (r *ContestAuthoringRepo) ListStaff(ctx context.Context, actor contest.Actor, limit, offset int) ([]contest.Summary, error) {
 	return r.list(ctx, `
-		SELECT id::text,title,opens_at,closes_at,duration_minutes,status
+		SELECT id::text,title,opens_at,closes_at,duration_minutes,status,''
 		FROM assessments WHERE (owner_id=$1 OR $2::boolean)
 		ORDER BY opens_at DESC,id DESC LIMIT $3 OFFSET $4
 	`, actor.ID, actor.Admin, limit, offset)
@@ -24,8 +24,16 @@ func (r *ContestAuthoringRepo) ListStaff(ctx context.Context, actor contest.Acto
 
 func (r *ContestAuthoringRepo) ListStudent(ctx context.Context, studentID string, limit, offset int) ([]contest.Summary, error) {
 	return r.list(ctx, `
-		SELECT a.id::text,a.title,a.opens_at,a.closes_at,a.duration_minutes,a.status
+		SELECT a.id::text,a.title,a.opens_at,a.closes_at,a.duration_minutes,a.status,
+   CASE
+    WHEN p.id IS NULL THEN ''
+    WHEN p.submitted_at IS NOT NULL THEN 'submitted'
+    WHEN a.cancelled_at < p.deadline_at THEN 'cancelled'
+    WHEN p.deadline_at <= statement_timestamp() THEN 'submitted'
+    ELSE 'active'
+   END
 		FROM assessment_roster r JOIN assessments a ON a.id=r.assessment_id
+  LEFT JOIN assessment_attempts p ON p.assessment_id=r.assessment_id AND p.student_id=r.student_id
 		WHERE r.student_id=$1 AND a.published_at IS NOT NULL
 		ORDER BY a.opens_at DESC,a.id DESC LIMIT $2 OFFSET $3
 	`, studentID, limit, offset)
@@ -40,7 +48,7 @@ func (r *ContestAuthoringRepo) list(ctx context.Context, sql string, args ...any
 	out := make([]contest.Summary, 0)
 	for rows.Next() {
 		var item contest.Summary
-		if err := rows.Scan(&item.ID, &item.Title, &item.OpensAt, &item.ClosesAt, &item.DurationMinutes, &item.Status); err != nil {
+		if err := rows.Scan(&item.ID, &item.Title, &item.OpensAt, &item.ClosesAt, &item.DurationMinutes, &item.Status, &item.AttemptState); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

@@ -22,7 +22,7 @@ type Config struct {
 	CookieSecure, SessionSliding                     bool
 	SessionTTL                                       time.Duration
 	Production                                       bool
-	ContestAuthoring                                 bool
+	ContestAuthoring, ContestAttempts                bool
 	PublicOrigin                                     string
 	TrustedProxies                                   []netip.Prefix
 }
@@ -121,6 +121,10 @@ func LoadConfig() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid LMS_CONTEST_AUTHORING")
 	}
+	attempts, err := strconv.ParseBool(get("LMS_CONTEST_ATTEMPTS", "false"))
+	if err != nil || (attempts && !contestAuthoring) {
+		return Config{}, fmt.Errorf("LMS_CONTEST_ATTEMPTS must be a boolean and requires LMS_CONTEST_AUTHORING=true when enabled")
+	}
 	graderPath := path("GRADER_BINARY_PATH", "target/release/lms-grader")
 	if os.Getenv("GRADER_BINARY_PATH") == "" {
 		if _, err := os.Stat(graderPath); err != nil {
@@ -134,7 +138,7 @@ func LoadConfig() (Config, error) {
 		graderPath = ""
 	}
 	return Config{
-		Addr: addr, DatabaseURL: databaseURL, RedisURL: redisURL, Production: production, ContestAuthoring: contestAuthoring, PublicOrigin: publicOrigin, TrustedProxies: proxies,
+		Addr: addr, DatabaseURL: databaseURL, RedisURL: redisURL, Production: production, ContestAuthoring: contestAuthoring, ContestAttempts: attempts, PublicOrigin: publicOrigin, TrustedProxies: proxies,
 		Assets: path("ASSET_STORAGE_DIR", "backend/.data/assets"), Web: path("WEB_DIST_DIR", "dist"),
 		Grader: graderPath, CookieSecure: secure, SessionSliding: sliding, SessionTTL: time.Duration(hours) * time.Hour,
 	}, nil

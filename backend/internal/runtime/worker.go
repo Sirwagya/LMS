@@ -38,7 +38,26 @@ func (rt *Runtime) Work(ctx context.Context) {
 		wg.Go(func() { rt.consumeGrading(ctx, uuid.NewString()) })
 	}
 	wg.Go(func() { rt.reapSubmissionAssets(ctx) })
+	if rt.Config.ContestAttempts {
+		wg.Go(func() { rt.expireContestAttempts(ctx) })
+	}
 	wg.Wait()
+}
+
+func (rt *Runtime) expireContestAttempts(ctx context.Context) {
+	const batch = 50
+	repo := postgres.NewContestAttemptRepo(rt.Tx)
+	for ctx.Err() == nil {
+		sweep, cancel := context.WithTimeout(ctx, 5*time.Second)
+		count, err := repo.Expire(sweep, batch)
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			rt.Log.Warn("contest attempt expiration failed", "err", err)
+		}
+		if err != nil || count < batch {
+			pause(ctx, 2*time.Second)
+		}
+	}
 }
 
 func pause(ctx context.Context, d time.Duration) {

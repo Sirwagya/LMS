@@ -49,7 +49,7 @@ func startAPI(t *testing.T) liveAPI {
 	return startAPIWithContests(t, false)
 }
 
-func startAPIWithContests(t *testing.T, contestAuthoring bool) liveAPI {
+func startAPIWithContests(t *testing.T, contestAuthoring bool, enableAttempts ...bool) liveAPI {
 	t.Helper()
 	root, err := filepath.Abs("../../..")
 	if err != nil {
@@ -110,7 +110,8 @@ func startAPIWithContests(t *testing.T, contestAuthoring bool) liveAPI {
 	query.Set("search_path", schema+",public")
 	db.RawQuery = query.Encode()
 	cfg := Config{DatabaseURL: db.String(), RedisURL: "unix://" + socket, Assets: filepath.Join(data, "assets"), Web: filepath.Join(root, "dist"),
-		SessionTTL: 24 * time.Hour, ContestAuthoring: contestAuthoring}
+		SessionTTL: 24 * time.Hour, ContestAuthoring: contestAuthoring,
+		ContestAttempts: len(enableAttempts) > 0 && enableAttempts[0]}
 	rt, err := Open(ctx, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +138,10 @@ type reply struct {
 }
 
 func (api liveAPI) call(ctx context.Context, method, path, token, key string, data any) (reply, error) {
+	return api.callWithHeaders(ctx, method, path, token, key, data, nil)
+}
+
+func (api liveAPI) callWithHeaders(ctx context.Context, method, path, token, key string, data any, headers map[string]string) (reply, error) {
 	var body io.Reader
 	if data != nil {
 		raw, err := json.Marshal(data)
@@ -156,6 +161,9 @@ func (api liveAPI) call(ctx context.Context, method, path, token, key string, da
 		req.Header.Set("Idempotency-Key", key)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return reply{}, err

@@ -23,7 +23,7 @@ func contestID(r *http.Request) (string, error) {
 }
 
 func (a *api) contestStatus(w http.ResponseWriter, r *http.Request) error {
-	writeJSON(w, 200, map[string]bool{"enabled": a.Contests != nil})
+	writeJSON(w, 200, map[string]bool{"enabled": a.Contests != nil, "attemptsEnabled": a.ContestAttempts != nil})
 	return nil
 }
 

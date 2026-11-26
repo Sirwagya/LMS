@@ -27,6 +27,7 @@ import (
 	"vedam/lms/internal/application/staff"
 	"vedam/lms/internal/application/workspace"
 	"vedam/lms/internal/domain/catalog"
+	"vedam/lms/internal/domain/contest"
 	"vedam/lms/migrations"
 )
 
@@ -112,12 +113,16 @@ func (rt *Runtime) Handler() (http.Handler, func(), error) {
 		return snapshot, err
 	}
 	contestRepo := postgres.NewContestAuthoringRepo(tx)
+	var attempts contest.AttemptRepository
+	if rt.Config.ContestAttempts && rt.Config.ContestAuthoring {
+		attempts = postgres.NewContestAttemptRepo(rt.Tx)
+	}
 	var contests *contestapp.Service
 	if rt.Config.ContestAuthoring {
 		contests = contestapp.New(contestRepo, tx, now, id)
 	}
 	return httpadapter.New(httpadapter.Dependencies{
-		ContestRepo: contestRepo, Contests: contests,
+		ContestRepo: contestRepo, Contests: contests, ContestAttempts: attempts,
 		Log: rt.Log, PingDB: rt.DB.Ping, Redis: rt.Redis, Sessions: redisadapter.NewSessions(rt.Redis, rt.Config.SessionTTL),
 		Cache: rt.Cache, CookieSecure: rt.Config.CookieSecure, PublicOrigin: rt.Config.PublicOrigin, TrustedProxies: rt.Config.TrustedProxies, Production: rt.Config.Production, SessionSliding: rt.Config.SessionSliding, SessionTTL: rt.Config.SessionTTL, Web: webFiles(rt.Config.Web),
 		Tx: tx, Users: users, Hasher: hasher, Catalog: cat, Notices: notices, Assignments: assignments, Submissions: subs,
