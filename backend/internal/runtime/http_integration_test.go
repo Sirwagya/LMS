@@ -46,6 +46,11 @@ func (testGrader) Evaluate(_ context.Context, req grader.Request) (grader.Result
 
 func startAPI(t *testing.T) liveAPI {
 	t.Helper()
+	return startAPIWithContests(t, false)
+}
+
+func startAPIWithContests(t *testing.T, contestAuthoring bool) liveAPI {
+	t.Helper()
 	root, err := filepath.Abs("../../..")
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +110,7 @@ func startAPI(t *testing.T) liveAPI {
 	query.Set("search_path", schema+",public")
 	db.RawQuery = query.Encode()
 	cfg := Config{DatabaseURL: db.String(), RedisURL: "unix://" + socket, Assets: filepath.Join(data, "assets"), Web: filepath.Join(root, "dist"),
-		SessionTTL: 24 * time.Hour}
+		SessionTTL: 24 * time.Hour, ContestAuthoring: contestAuthoring}
 	rt, err := Open(ctx, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

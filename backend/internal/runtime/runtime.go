@@ -21,6 +21,7 @@ import (
 	"vedam/lms/internal/adapters/postgres"
 	redisadapter "vedam/lms/internal/adapters/redis"
 	"vedam/lms/internal/adapters/storage"
+	contestapp "vedam/lms/internal/application/contest"
 	"vedam/lms/internal/application/finance"
 	"vedam/lms/internal/application/learning"
 	"vedam/lms/internal/application/staff"
@@ -110,7 +111,13 @@ func (rt *Runtime) Handler() (http.Handler, func(), error) {
 		err = json.Unmarshal(raw, &snapshot)
 		return snapshot, err
 	}
+	contestRepo := postgres.NewContestAuthoringRepo(tx)
+	var contests *contestapp.Service
+	if rt.Config.ContestAuthoring {
+		contests = contestapp.New(contestRepo, tx, now, id)
+	}
 	return httpadapter.New(httpadapter.Dependencies{
+		ContestRepo: contestRepo, Contests: contests,
 		Log: rt.Log, PingDB: rt.DB.Ping, Redis: rt.Redis, Sessions: redisadapter.NewSessions(rt.Redis, rt.Config.SessionTTL),
 		Cache: rt.Cache, CookieSecure: rt.Config.CookieSecure, PublicOrigin: rt.Config.PublicOrigin, TrustedProxies: rt.Config.TrustedProxies, Production: rt.Config.Production, SessionSliding: rt.Config.SessionSliding, SessionTTL: rt.Config.SessionTTL, Web: webFiles(rt.Config.Web),
 		Tx: tx, Users: users, Hasher: hasher, Catalog: cat, Notices: notices, Assignments: assignments, Submissions: subs,

@@ -14,6 +14,7 @@ import (
 
 	redisadapter "vedam/lms/internal/adapters/redis"
 	"vedam/lms/internal/adapters/storage"
+	contestapp "vedam/lms/internal/application/contest"
 	"vedam/lms/internal/application/finance"
 	learningapp "vedam/lms/internal/application/learning"
 	"vedam/lms/internal/application/staff"
@@ -21,6 +22,7 @@ import (
 	"vedam/lms/internal/domain/academic"
 	"vedam/lms/internal/domain/assessment"
 	"vedam/lms/internal/domain/catalog"
+	"vedam/lms/internal/domain/contest"
 	"vedam/lms/internal/domain/envelope"
 	"vedam/lms/internal/domain/errs"
 	financedomain "vedam/lms/internal/domain/finance"
@@ -96,18 +98,20 @@ type Dependencies struct {
 	Discussions interface {
 		GetByID(context.Context, string) (learning.Discussion, error)
 	}
-	Progress  Progress
-	Invoices  Invoices
-	Academic  Academic
-	Sync      Sync
-	AssetMeta catalog.AssetMetadataRepository
-	Assets    *storage.LocalAssets
-	Bootstrap *workspace.BootstrapService
-	Learning  *learningapp.Service
-	Staff     *staff.Service
-	Payments  *finance.PayInvoiceService
-	Coding    CodingService
-	Queue     *redisadapter.Queue
+	Progress    Progress
+	Invoices    Invoices
+	Academic    Academic
+	Sync        Sync
+	AssetMeta   catalog.AssetMetadataRepository
+	Assets      *storage.LocalAssets
+	Bootstrap   *workspace.BootstrapService
+	Learning    *learningapp.Service
+	Staff       *staff.Service
+	Payments    *finance.PayInvoiceService
+	Coding      CodingService
+	Queue       *redisadapter.Queue
+	Contests    *contestapp.Service
+	ContestRepo contest.Repository
 }
 
 type api struct {
@@ -186,6 +190,22 @@ func New(d Dependencies) http.Handler {
 		{"GET", "/biometrics/face", authenticated, a.face},
 	} {
 		a.mount(mux, "/api/v1", rt)
+	}
+	for _, prefix := range []string{"/api", "/api/v1"} {
+		a.mount(mux, prefix, route{"GET", "/contests/status", authenticated, a.contestStatus})
+		if d.Contests != nil {
+			for _, rt := range []route{
+				{"GET", "/contests", student, a.contestList},
+				{"GET", "/staff/contests", staffOnly, a.contestList},
+				{"POST", "/staff/contests", staffOnly, a.contestSave},
+				{"GET", "/staff/contests/{id}", staffOnly, a.contestDetail},
+				{"PUT", "/staff/contests/{id}", staffOnly, a.contestSave},
+				{"POST", "/staff/contests/{id}/publish", staffOnly, a.contestPublish},
+				{"POST", "/staff/contests/{id}/cancel", staffOnly, a.contestCancel},
+			} {
+				a.mount(mux, prefix, rt)
+			}
+		}
 	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { a.failure(w, r, problem(404, "Endpoint not found.")) })
 	if d.Web != nil {
