@@ -13,7 +13,11 @@ export type IntegrityEventType =
   | "fullscreen.enter"
   | "fullscreen.exit"
   | "heartbeat.gap"
-  | "client.reconnect";
+  | "client.reconnect"
+  | "app.opened"
+  | "proctor.camera_lost"
+  | "proctor.mic_lost"
+  | "proctor.screen_lost";
 
 export type IntegrityEvent = {
   seq: number;
@@ -425,6 +429,15 @@ export function useContestIntegrity({
     [attemptId, enabled, enqueue],
   );
 
+  const recordProctorEvent = useCallback(
+    (eventType: IntegrityEventType, payload: Record<string, unknown> = {}) => {
+      if (!enabled || !attemptId) return;
+      enqueue(eventType, payload);
+      void flushBatch();
+    },
+    [attemptId, enabled, enqueue, flushBatch],
+  );
+
   const handleEditorPasteCapture = useCallback(
     (questionIndex: number) => (event: ClipboardEvent<HTMLElement>) => {
       if (!enabled || !attemptId) return;
@@ -463,6 +476,7 @@ export function useContestIntegrity({
     recordMcqSelect,
     recordCodeChange,
     recordPaste,
+    recordProctorEvent,
     handleEditorPasteCapture,
   };
 }

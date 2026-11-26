@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ClipboardEvent, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type FormEvent } from "react";
 import { api, transport } from "../api";
 import { useSession } from "../session";
 import { CodeEditor } from "../coding/CodeEditor";
@@ -6,6 +6,7 @@ import type { Language } from "../coding/types";
 import { contestTime } from "./types";
 import { useContestAttempt, type Answer, type CodingSubmission, type Question } from "./useContestAttempt";
 import { useContestIntegrity } from "./useContestIntegrity";
+import { useContestProctoring } from "./useContestProctoring";
 import { useContestFeatures } from "./useContestsEnabled";
 import "./contestAttempt.css";
 
@@ -78,6 +79,15 @@ export function ContestAttempt({ id }: { id: string }) {
     reviewMode: review,
     attemptError: error,
   });
+  const proctor = useContestProctoring({
+    contestId: id,
+    attemptId: view?.attemptId,
+    enabled: integrityEnabled,
+    active: view?.state === "active",
+    ready: view?.state === "ready",
+    onProctorEvent: integrity.recordProctorEvent,
+  });
+  const proctoredDesktop = integrityEnabled && transport.isDesktop;
   const question = view?.questions?.[selected];
   const answer = answers[selected];
   const locked = busy || remaining === 0 || error.startsWith("Saved answers changed") || error.startsWith("Your saved answers changed");
@@ -117,18 +127,159 @@ export function ContestAttempt({ id }: { id: string }) {
                 {typeof navigator !== "undefined" && !navigator.onLine ? "Offline" : "Online"}.
               </p>
               <p>
-                <strong>What is recorded:</strong> contest navigation, MCQ &amp; code edits, paste size, focus/fullscreen changes, reconnects.
+                <strong>What is recorded:</strong> contest navigation, MCQ &amp; code edits, paste size, focus/fullscreen changes, reconnects
+                {transport.isDesktop ? ", periodic camera/audio clips, periodic screen snapshots, and active app checks" : ""}.
               </p>
               <p>
-                <strong>What is not collected:</strong> screen, webcam, microphone, clipboard contents, global keystrokes, and unrelated apps stay outside collection.
+                <strong>What is not collected:</strong>{" "}
+                {transport.isDesktop
+                  ? "clipboard contents and global keystrokes stay outside collection."
+                  : "screen, webcam, microphone, clipboard contents, global keystrokes, and unrelated apps stay outside collection."}
               </p>
               <p className="contest-fairness-note">
                 Automated signals only queue human review and never auto-disqualify.
               </p>
             </section>
           )}
+          {view.state === "ready" && proctoredDesktop && (
+            <section className="contest-proctor-setup" aria-label="Proctoring & Lockdown Setup">
+              <h3>Proctoring &amp; Lockdown Setup</h3>
+              <p className="muted">Complete every hardware and lockdown check below to enable Start contest.</p>
+              <div className="contest-proctor-steps">
+                <div className="contest-proctor-step">
+                  <div className="contest-proctor-step-head">
+                    <div>
+                      <strong>1. Close other applications</strong>
+                      <p className="muted">All external apps must be closed before starting.</p>
+                    </div>
+                    <span className={`contest-badge ${proctor.openApps.length === 0 ? "is-ok" : "is-warn"}`}>
+                      {proctor.openApps.length === 0 ? "No external apps open" : `${proctor.openApps.length} open`}
+                    </span>
+                  </div>
+                  {proctor.openApps.length > 0 && (
+                    <ul className="contest-proctor-apps">
+                      {proctor.openApps.map((app) => (
+                        <li key={`${app.bundleId}-${app.pid}`}>
+                          <span>{app.name}</span>
+                          {app.bundleId && <span className="muted">{app.bundleId}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {proctor.appsError && <p className="contest-proctor-error" role="alert">{proctor.appsError}</p>}
+                  <div className="contest-proctor-actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={proctor.appsBusy || proctor.openApps.length === 0}
+                      onClick={() => void proctor.quitOtherApps()}
+                    >
+                      {proctor.appsBusy ? "Closing…" : "Quit other apps"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={proctor.appsBusy}
+                      onClick={() => void proctor.refreshApps()}
+                    >
+                      Recheck
+                    </button>
+                  </div>
+                </div>
+
+                <div className="contest-proctor-step">
+                  <div className="contest-proctor-step-head">
+                    <div>
+                      <strong>2. Camera &amp; Microphone</strong>
+                      <p className="muted">Live video and audio are checked throughout your attempt.</p>
+                    </div>
+                    <div className="contest-proctor-badges">
+                      <span className={`contest-badge ${proctor.cameraReady ? "is-ok" : "is-warn"}`}>
+                        {proctor.cameraReady ? "Camera ready" : "Camera needed"}
+                      </span>
+                      <span className={`contest-badge ${proctor.micReady ? "is-ok" : "is-warn"}`}>
+                        {proctor.micReady ? "Mic ready" : "Mic needed"}
+                      </span>
+                    </div>
+                  </div>
+                  <ProctorVideoPreview
+                    stream={proctor.mediaStream}
+                    className="contest-proctor-preview"
+                    label="Camera self-preview"
+                  />
+                  {proctor.mediaError && <p className="contest-proctor-error" role="alert">{proctor.mediaError}</p>}
+                  <div className="contest-proctor-actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => void proctor.enableCameraAndMic()}
+                    >
+                      {proctor.cameraReady && proctor.micReady ? "Re-test camera & mic" : "Enable camera & mic"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="contest-proctor-step">
+                  <div className="contest-proctor-step-head">
+                    <div>
+                      <strong>3. Screen Capture</strong>
+                      <p className="muted">Periodic screen snapshots verify only your contest workspace is visible.</p>
+                    </div>
+                    <span className={`contest-badge ${proctor.screenReady ? "is-ok" : "is-warn"}`}>
+                      {proctor.screenReady ? "Screen capture ready" : "Not verified"}
+                    </span>
+                  </div>
+                  {proctor.screenError && (
+                    <div className="contest-proctor-guidance" role="alert">
+                      <p className="contest-proctor-error">{proctor.screenError}</p>
+                      <p className="muted">
+                        If denied on macOS, open System Settings → Privacy &amp; Security → Screen &amp; System Audio Recording, allow this app, and click Verify screen capture again.
+                      </p>
+                    </div>
+                  )}
+                  <div className="contest-proctor-actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => void proctor.verifyScreenCapture()}
+                    >
+                      {proctor.screenReady ? "Re-verify screen capture" : "Verify screen capture"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="contest-proctor-step">
+                  <div className="contest-proctor-step-head">
+                    <div>
+                      <strong>4. Forced Fullscreen</strong>
+                      <p className="muted">Fullscreen mode stays active until your attempt is submitted.</p>
+                    </div>
+                    <span className={`contest-badge ${proctor.isFullscreen ? "is-ok" : "is-warn"}`}>
+                      {proctor.isFullscreen ? "Fullscreen active" : "Fullscreen required"}
+                    </span>
+                  </div>
+                  <div className="contest-proctor-actions">
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      disabled={proctor.fullscreenBusy || proctor.isFullscreen}
+                      onClick={() => void proctor.enterFullscreen()}
+                    >
+                      {proctor.fullscreenBusy ? "Entering…" : proctor.isFullscreen ? "Fullscreen active" : "Enter fullscreen"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
           {view.state === "ready" ? (
-            <button className="btn btn-primary" disabled={busy} onClick={() => void open("start")}>Start attempt</button>
+            <button
+              className="btn btn-primary"
+              disabled={busy || (proctoredDesktop && !proctor.allChecksPassed)}
+              onClick={() => void open("start")}
+            >
+              Start contest
+            </button>
           ) : (
             <button className="btn btn-secondary" disabled={busy} onClick={() => void open("state")}>Check availability</button>
           )}
@@ -159,7 +310,26 @@ export function ContestAttempt({ id }: { id: string }) {
           <div className="contest-status">
             <span role="timer" aria-label="Time remaining">{timer}</span>
             <span role="status">{remaining === 0 ? "Confirming submission…" : saving ? "Saving…" : dirty ? localDurable ? "Changes saved on this device" : "Changes still unsaved" : "Saved to server"}</span>
-            {integrityEnabled && (
+            {proctoredDesktop ? (
+              <div className="contest-status-actions">
+                <div className="contest-proctor-status" aria-label="Proctoring active">
+                  <span className="contest-proctor-rec-dot" aria-hidden="true" />
+                  <span className="contest-proctor-pill-text">
+                    REC · Cam {proctor.cameraChunksUploaded} · Screen {proctor.screenShotsUploaded}
+                  </span>
+                  <ProctorVideoPreview
+                    stream={proctor.mediaStream}
+                    className="contest-proctor-pip"
+                    label="Live facecam preview"
+                  />
+                </div>
+                {proctor.lastUploadError && (
+                  <span className="contest-proctor-upload-warn" title={proctor.lastUploadError}>
+                    Upload warning
+                  </span>
+                )}
+              </div>
+            ) : integrityEnabled ? (
               <div className="contest-status-actions">
                 <button
                   type="button"
@@ -169,10 +339,115 @@ export function ContestAttempt({ id }: { id: string }) {
                   {integrity.isFullscreen ? "Exit fullscreen mode" : "Enter fullscreen mode"}
                 </button>
               </div>
-            )}
+            ) : null}
           </div>
           {sizeError && <p role="alert">{sizeError}</p>}
-          <div className="contest-workspace">
+          {proctoredDesktop && proctor.lockdownViolation && (
+            <div
+              className="contest-lockdown-overlay"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="contest-lockdown-title"
+            >
+              <div className="contest-lockdown-card">
+                <span className="contest-badge is-warn">Proctoring lockdown</span>
+                <h2 id="contest-lockdown-title">Workspace locked until checks are restored</h2>
+                <p>Your contest timer continues running. Resolve every item below to resume working.</p>
+                <ul className="contest-lockdown-reasons">
+                  {proctor.openApps.length > 0 && (
+                    <li>
+                      <div>
+                        <strong>External applications open ({proctor.openApps.length}):</strong>{" "}
+                        {proctor.openApps.map((app) => app.name).join(", ")}
+                        {proctor.appsError && (
+                          <p className="contest-proctor-error" role="alert">{proctor.appsError}</p>
+                        )}
+                      </div>
+                      <div className="contest-proctor-actions">
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={proctor.appsBusy}
+                          onClick={() => void proctor.quitOtherApps()}
+                        >
+                          {proctor.appsBusy ? "Closing…" : "Quit other apps"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          disabled={proctor.appsBusy}
+                          onClick={() => void proctor.refreshApps()}
+                        >
+                          Recheck
+                        </button>
+                      </div>
+                    </li>
+                  )}
+                  {!proctor.isFullscreen && (
+                    <li>
+                      <div>
+                        <strong>Fullscreen required:</strong> Return to fullscreen mode to unlock your contest.
+                      </div>
+                      <div className="contest-proctor-actions">
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          disabled={proctor.fullscreenBusy}
+                          onClick={() => void proctor.enterFullscreen()}
+                        >
+                          {proctor.fullscreenBusy ? "Entering…" : "Return to fullscreen"}
+                        </button>
+                      </div>
+                    </li>
+                  )}
+                  {(!proctor.cameraReady || !proctor.micReady) && (
+                    <li>
+                      <div>
+                        <strong>
+                          {!proctor.cameraReady && !proctor.micReady
+                            ? "Camera & microphone disconnected:"
+                            : !proctor.cameraReady
+                              ? "Camera feed lost:"
+                              : "Microphone feed lost:"}
+                        </strong>{" "}
+                        {proctor.mediaError || "Live camera and microphone feeds are required."}
+                      </div>
+                      <div className="contest-proctor-actions">
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={() => void proctor.enableCameraAndMic()}
+                        >
+                          Re-enable camera &amp; mic
+                        </button>
+                      </div>
+                    </li>
+                  )}
+                  {!proctor.screenReady && (
+                    <li>
+                      <div>
+                        <strong>Screen capture interrupted:</strong>{" "}
+                        {proctor.screenError || "Screen capture permission is required throughout the contest."}
+                      </div>
+                      <div className="contest-proctor-actions">
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={() => void proctor.verifyScreenCapture()}
+                        >
+                          Re-verify screen
+                        </button>
+                      </div>
+                    </li>
+                  )}
+                </ul>
+              </div>
+            </div>
+          )}
+          <div
+            className={proctoredDesktop && proctor.lockdownViolation ? "contest-workspace is-locked" : "contest-workspace"}
+            aria-hidden={proctoredDesktop && proctor.lockdownViolation ? true : undefined}
+          >
             <nav className="contest-navigation" aria-label="Contest questions">
               {view.questions?.map((_, index) => (
                 <button key={index} className="btn btn-secondary" type="button" aria-current={!review && selected === index ? "step" : undefined}
@@ -440,5 +715,36 @@ function CodingQuestion({
         </ul>
       )}
     </div>
+  );
+}
+
+function ProctorVideoPreview({
+  stream,
+  className,
+  label,
+}: {
+  stream: MediaStream | null;
+  className: string;
+  label: string;
+}) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    const element = videoRef.current;
+    if (!element) return;
+    element.srcObject = stream;
+    return () => {
+      element.srcObject = null;
+    };
+  }, [stream]);
+  if (!stream) return null;
+  return (
+    <video
+      ref={videoRef}
+      className={className}
+      autoPlay
+      muted
+      playsInline
+      aria-label={label}
+    />
   );
 }

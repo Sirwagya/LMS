@@ -149,6 +149,23 @@ type ReplayResponse = {
   appeals?: StaffAppeal[];
 };
 
+type ProctorMediaItem = {
+  id: string;
+  attemptId?: string;
+  kind: "camera_audio" | "screen_snapshot" | string;
+  seq: number;
+  contentType?: string;
+  byteSize?: number;
+  sizeBytes?: number;
+  durationMs?: number;
+  capturedAt?: string;
+  createdAt?: string;
+};
+
+type AttemptMediaResponse =
+  | ProctorMediaItem[]
+  | { items?: ProctorMediaItem[]; media?: ProctorMediaItem[] };
+
 type DiffLine = { kind: "same" | "add" | "remove"; text: string };
 
 const reviewDecisionLabels: Record<string, string> = {
@@ -199,6 +216,19 @@ function formatMissingInterval(interval: MissingInterval): string {
     : `Missing client batch seq ${from}–${to}`;
 }
 
+function normalizeAttemptMedia(raw: AttemptMediaResponse | null | undefined): ProctorMediaItem[] {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  return raw.items ?? raw.media ?? [];
+}
+
+function formatMediaBytes(bytes?: number): string {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 function formatSimilarityPercent(pair: SimilarityPair): string {
   const raw = pair.score ?? pair.similarity ?? 0;
   const pct = raw <= 1 ? raw * 100 : raw;
@@ -231,6 +261,22 @@ function summarizeEvent(event: ReplayEvent): string {
   }
   if (kind === "nav.question" && payload.review === true) {
     return "Review screen";
+  }
+  if (kind === "app.opened") {
+    const apps = Array.isArray(payload.apps) ? payload.apps : [];
+    const names = apps
+      .map((app) => (app && typeof app === "object" && "name" in app ? String((app as { name: unknown }).name) : ""))
+      .filter(Boolean);
+    return names.length > 0 ? `Apps opened: ${names.join(", ")}` : "External app opened";
+  }
+  if (kind === "proctor.camera_lost") {
+    return "Camera feed lost";
+  }
+  if (kind === "proctor.mic_lost") {
+    return "Microphone feed lost";
+  }
+  if (kind === "proctor.screen_lost") {
+    return "Screen capture lost";
   }
   return prefix ? prefix.slice(0, -3) : "Recorded";
 }
@@ -291,6 +337,8 @@ export function ContestIntegrityReview({ contestId }: { contestId: string }) {
   const [reviewerId, setReviewerId] = useState("");
   const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null);
   const [replay, setReplay] = useState<ReplayResponse | null>(null);
+  const [replayMedia, setReplayMedia] = useState<ProctorMediaItem[]>([]);
+  const [replayMediaError, setReplayMediaError] = useState("");
   const [replayLoading, setReplayLoading] = useState(false);
   const [cursor, setCursor] = useState(0);
 
@@ -333,8 +381,17 @@ export function ContestIntegrityReview({ contestId }: { contestId: string }) {
     setSelectedAttemptId(attemptId);
     setReplayLoading(true);
     setError("");
+    setReplayMedia([]);
+    setReplayMediaError("");
     try {
-      const data = await api<ReplayResponse>(`/staff/contests/${contestId}/attempts/${attemptId}/replay`);
+      const [replayResult, mediaResult] = await Promise.allSettled([
+        api<ReplayResponse>(`/staff/contests/${contestId}/attempts/${attemptId}/replay`),
+        api<AttemptMediaResponse>(`/staff/contests/${contestId}/attempts/${attemptId}/media`),
+      ]);
+      if (replayResult.status === "rejected") {
+        throw replayResult.reason;
+      }
+      const data = replayResult.value;
       setReplay(data);
       setCursor(Math.max(0, (data.events?.length ?? 1) - 1));
       const summary = overview?.reviews.find((r) => r.attemptId === attemptId);
@@ -345,9 +402,20 @@ export function ContestIntegrityReview({ contestId }: { contestId: string }) {
         setDecisionStatus("under_review");
       }
       setDecisionReason(data.review?.reason ?? data.reason ?? summary?.reason ?? "");
+      if (mediaResult.status === "fulfilled") {
+        setReplayMedia(normalizeAttemptMedia(mediaResult.value));
+      } else {
+        setReplayMedia([]);
+        setReplayMediaError(
+          mediaResult.reason instanceof Error
+            ? mediaResult.reason.message
+            : "Could not load proctoring recordings.",
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load attempt replay.");
       setReplay(null);
+      setReplayMedia([]);
     } finally {
       setReplayLoading(false);
     }
@@ -611,6 +679,8 @@ export function ContestIntegrityReview({ contestId }: { contestId: string }) {
                   onClick={() => {
                     setSelectedAttemptId(null);
                     setReplay(null);
+                    setReplayMedia([]);
+                    setReplayMediaError("");
                   }}
                 >
                   Close replay
@@ -791,6 +861,12 @@ export function ContestIntegrityReview({ contestId }: { contestId: string }) {
                       </div>
                     </div>
                   )}
+
+                  <AttemptProctorMediaSection
+                    contestId={contestId}
+                    items={replayMedia}
+                    error={replayMediaError}
+                  />
                 </>
               )}
             </section>
@@ -953,5 +1029,102 @@ function SimilaritySnippets({ pair }: { pair: SimilarityPair }) {
         <pre className="contest-payload-preview">{`Attempt B:\n${pair.snippetB}`}</pre>
       )}
     </>
+  );
+}
+
+function AttemptProctorMediaSection({
+  contestId,
+  items,
+  error,
+}: {
+  contestId: string;
+  items: ProctorMediaItem[];
+  error: string;
+}) {
+  const cameraClips = items
+    .filter((item) => item.kind === "camera_audio")
+    .sort((a, b) => a.seq - b.seq);
+  const screenSnapshots = items
+    .filter((item) => item.kind === "screen_snapshot")
+    .sort((a, b) => a.seq - b.seq);
+
+  return (
+    <section
+      className="contest-proctor-media-section"
+      aria-label="Proctoring Recordings (Camera, Audio and Screen)"
+    >
+      <h5>Proctoring Recordings (Camera, Audio &amp; Screen)</h5>
+      {error ? (
+        <p role="alert">{error}</p>
+      ) : cameraClips.length === 0 && screenSnapshots.length === 0 ? (
+        <p className="muted">No camera, audio, or screen recordings recorded for this attempt.</p>
+      ) : (
+        <>
+          <div className="contest-media-group">
+            <h6>Camera &amp; Audio Clips ({cameraClips.length})</h6>
+            {cameraClips.length === 0 ? (
+              <p className="muted">No camera/audio clips recorded.</p>
+            ) : (
+              <div className="contest-media-video-grid">
+                {cameraClips.map((item) => {
+                  const ts = item.capturedAt ?? item.createdAt;
+                  const size = formatMediaBytes(item.byteSize ?? item.sizeBytes);
+                  return (
+                    <article key={item.id} className="contest-media-card">
+                      <video
+                        controls
+                        preload="metadata"
+                        src={`/api/staff/contests/${contestId}/media/${item.id}`}
+                      />
+                      <div className="contest-media-meta">
+                        <span className="contest-badge">Chunk #{item.seq}</span>
+                        {ts && <span className="muted">{contestTime(ts)}</span>}
+                        {size && <span className="muted contest-tabular">{size}</span>}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="contest-media-group">
+            <h6>Screen Snapshots ({screenSnapshots.length})</h6>
+            {screenSnapshots.length === 0 ? (
+              <p className="muted">No screen snapshots recorded.</p>
+            ) : (
+              <div className="contest-media-screen-grid">
+                {screenSnapshots.map((item) => {
+                  const ts = item.capturedAt ?? item.createdAt;
+                  const size = formatMediaBytes(item.byteSize ?? item.sizeBytes);
+                  const mediaUrl = `/api/staff/contests/${contestId}/media/${item.id}`;
+                  return (
+                    <article key={item.id} className="contest-media-card">
+                      <a
+                        href={mediaUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="contest-media-thumb-link"
+                      >
+                        <img
+                          src={mediaUrl}
+                          alt={`Screen snapshot #${item.seq}`}
+                          loading="lazy"
+                        />
+                      </a>
+                      <div className="contest-media-meta">
+                        <span className="contest-badge">Shot #{item.seq}</span>
+                        {ts && <span className="muted">{contestTime(ts)}</span>}
+                        {size && <span className="muted contest-tabular">{size}</span>}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </section>
   );
 }
