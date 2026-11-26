@@ -15,6 +15,7 @@ The project is designed for local demos and development. It does not provide rea
 - [Development Commands](#development-commands)
 - [Configuration](#configuration)
 - [Coding Challenges](#coding-challenges)
+- [Contests and Proctoring](#contests-and-proctoring)
 - [Desktop App](#desktop-app)
 - [Testing](#testing)
 - [Documentation](#documentation)
@@ -28,6 +29,7 @@ The project is designed for local demos and development. It does not provide rea
 - Browse semesters, subjects, lectures, lecture notes, attachments, and recordings.
 - Mark lectures complete and participate in lecture discussions.
 - Submit written or coding assignments and review feedback and grades.
+- Take timed contests with MCQs and coding problems, then view personal reports and cohort leaderboards after results release.
 - View attendance, performance summaries, schedules, notices, and invoices.
 - Save a profile, coding profile, profile photo, and banner.
 - Preview and pay seeded invoices through a clearly labeled simulation.
@@ -40,6 +42,7 @@ The project is designed for local demos and development. It does not provide rea
 - Grade written submissions and record student attendance.
 - Publish class sessions and notices.
 - Create coding challenges with public example tests and hidden test cases.
+- Author timed contests, review integrity evidence and flagged attempts, and publish versioned results with a cohort leaderboard.
 
 ### Administrators
 
@@ -218,7 +221,7 @@ The seeded student contains illustrative academic records. A newly registered st
 | `npm run build` | Type-check and build the web app into `dist/` |
 | `npm start` | Build and run the Go API and worker |
 | `npm run lint` | Lint TypeScript and JavaScript |
-| `npm test` | Run Rust, JavaScript, and Node test suites |
+| `npm test` | Run the Rust workspace tests and Node integration tests |
 | `npm run desktop:dev` | Run the Tauri desktop app in development |
 | `npm run desktop:build` | Build the macOS desktop bundle |
 
@@ -246,6 +249,13 @@ Copy `.env.example` to `.env`, then adjust values as needed.
 | `SESSION_TTL_HOURS` | `24` | Session lifetime |
 | `SESSION_SLIDING` | `false` | Renew sessions on authenticated requests |
 | `COOKIE_SECURE` | `false` | Require HTTPS-only session cookies |
+| `LMS_CONTEST_AUTHORING` | `false` | Contest drafting, scheduling, and cohort visibility |
+| `LMS_CONTEST_ATTEMPTS` | `false` | Timed contest attempts in the macOS app |
+| `LMS_CONTEST_GRADING` | `false` | Scored contests through the remote judge |
+| `LMS_CONTEST_JUDGE_URL` | empty | Isolated judge endpoint for scored submissions |
+| `LMS_CONTEST_JUDGE_TOKEN` | empty | Bearer token for the judge endpoint |
+| `LMS_CONTEST_INTEGRITY` | `false` | Attempt integrity events and staff replay review |
+| `LMS_CONTEST_RESULTS` | `false` | Versioned reports and cohort leaderboard release |
 
 The API uses an HttpOnly, SameSite session cookie for web clients. Native clients use bearer authentication and `X-LMS-Auth: bearer`.
 
@@ -295,6 +305,25 @@ The local runner uses an isolated temporary directory and the Rust grader:
 
 This is a local teaching runner, not a hardened multi-tenant judge. Public or multi-tenant hosting should use an isolated container or virtual-machine execution provider.
 
+## Contests and Proctoring
+
+Contests are preview features enabled per flag. Enable what you need in `.env`:
+
+```bash
+LMS_CONTEST_AUTHORING=true
+LMS_CONTEST_ATTEMPTS=true
+LMS_CONTEST_INTEGRITY=true
+LMS_CONTEST_RESULTS=true
+```
+
+- **Authoring** (`Staff → Contests`): teachers draft timed contests with single-answer MCQs and Java or Python coding questions, publish a frozen revision, or cancel with a recorded reason.
+- **Attempts** (macOS app): students run a preflight gate, then take the contest in a fixed-timer workspace with MCQ flagging, CodeMirror coding, save indicators, and resume across reloads. The worker finalizes expired attempts.
+- **Grading** (`LMS_CONTEST_GRADING=true`): scored submissions go to a separate isolated judge endpoint, not the local macOS grader. Infrastructure failures are retried; failures that could change marks mark the attempt **Needs review**.
+- **Integrity**: the app records focus, fullscreen, and app-activity signals as review evidence, and teachers replay synchronized timelines in **Staff → Contests**. Fullscreen loss or focus loss counts as a warning; the third warning auto-submits the attempt for faculty review.
+- **Results**: after release, students see their own report (score, rank, breakdown) and the cohort leaderboard, with a contest alias option.
+
+Proctoring lockdown (clipboard clearing, paste blocking, Command-Tab restriction, quitting other apps) requires the macOS Tauri app. The web browser shows attempt UI and client-side observations only. This is a local integrity aid, not a hardened assessment platform; OS-level prevention requires Apple Assessment Mode and an approved entitlement. See [docs/CONTESTS.md](docs/CONTESTS.md) for the full contracts.
+
 ## Desktop App
 
 The macOS Tauri app reuses the React frontend and provides native Keychain storage, notifications, a local SQLite store, and a Rust sync engine.
@@ -303,7 +332,7 @@ The macOS Tauri app reuses the React frontend and provides native Keychain stora
 npm run desktop:dev
 ```
 
-The desktop app requires macOS and the same local infrastructure as the web app. Switching accounts revokes the active bearer session.
+The desktop app requires macOS and the same local infrastructure as the web app. Switching accounts revokes the active bearer session. Proctored contest lockdown is available only in this app; it exposes fullscreen, focus, running-app, and screen-capture commands to the contest attempt UI.
 
 ## Testing
 
@@ -335,13 +364,7 @@ Test categories include:
 ## Documentation
 
 - [Architecture and SOLID decisions](docs/ARCHITECTURE.md)
-- [System design and topology](docs/SYSTEM-DESIGN.md)
-- [Phase 1: Go and PostgreSQL](docs/phases/PHASE-1-GO-CORE-AND-POSTGRES.md)
-- [Phase 2: API and Redis](docs/phases/PHASE-2-GO-API-REDIS-AND-PARITY.md)
-- [Phase 3: Rust grader](docs/phases/PHASE-3-RUST-CODE-GRADER.md)
-- [Phase 4: Offline sync](docs/phases/PHASE-4-RUST-OFFLINE-SYNC-ENGINE.md)
-- [Phase 5: Tauri app](docs/phases/PHASE-5-MACOS-TAURI-APP.md)
-- [Phase 6: Contests](docs/phases/PHASE-6-CONTESTS.md)
+- [Contests and integrity](docs/CONTESTS.md)
 
 ## Safety and Scope
 
@@ -351,6 +374,7 @@ Vedam LMS is a demonstration project. It includes:
 - Simulated payments and labeled sample receipts
 - Local file storage
 - Local Java/Python execution on macOS
+- Contest proctoring from local desktop signals, with faculty review of flagged attempts
 - Public demo credentials
 
 It does not include real payment processing, real identity verification, email password recovery, external video hosting, institutional data synchronization, or hardened public code execution.
