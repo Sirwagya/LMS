@@ -233,11 +233,13 @@ var validProctorMediaKinds = map[string]bool{
 }
 
 var proctorMediaExtensions = map[string]string{
-	"video/webm": "webm",
-	"video/mp4":  "mp4",
-	"audio/webm": "webm",
-	"image/jpeg": "jpg",
-	"image/png":  "png",
+	"video/webm":      "webm",
+	"video/mp4":       "mp4",
+	"video/quicktime": "mov",
+	"audio/webm":      "webm",
+	"audio/mp4":       "m4a",
+	"image/jpeg":      "jpg",
+	"image/png":       "png",
 }
 
 // NormalizeProctorMediaType validates a proctoring media MIME type against the

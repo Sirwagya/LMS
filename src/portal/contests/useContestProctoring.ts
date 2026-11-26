@@ -22,7 +22,7 @@ export type UseContestProctoringOptions = {
 };
 
 const DEVICE_STORAGE_KEY = "lms:contest-device";
-const CAMERA_CHUNK_MS = 15_000;
+const CAMERA_CHUNK_MS = 10_000;
 const SCREEN_SNAPSHOT_MS = 10_000;
 const WATCHDOG_POLL_MS = 5_000;
 
@@ -111,17 +111,16 @@ function pickRecorderMimeType(): string | undefined {
   return CANDIDATE_MIME_TYPES.find((mime) => MediaRecorder.isTypeSupported(mime));
 }
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const value = String(reader.result ?? "");
-      const comma = value.indexOf(",");
-      resolve(comma >= 0 ? value.slice(comma + 1) : value);
-    };
-    reader.onerror = () => reject(new Error("Could not encode recorded media chunk."));
-    reader.readAsDataURL(blob);
-  });
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  if (bytes.byteLength === 0) return "";
+  const chunkSize = 0x2000;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.byteLength; i += chunkSize) {
+    const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.byteLength));
+    parts.push(String.fromCharCode(...slice));
+  }
+  return btoa(parts.join(""));
 }
 
 function releaseMediaStream(
@@ -516,16 +515,24 @@ export function useContestProctoring({
     const mimeType = pickRecorderMimeType();
     let recorder: MediaRecorder;
     try {
-      recorder = mimeType
-        ? new MediaRecorder(mediaStream, { mimeType })
-        : new MediaRecorder(mediaStream);
-    } catch (err) {
-      Promise.resolve().then(() => {
-        if (mountedRef.current) {
-          setLastUploadError(extractError(err, "Could not start camera/audio recorder."));
-        }
+      recorder = new MediaRecorder(mediaStream, {
+        ...(mimeType ? { mimeType } : {}),
+        videoBitsPerSecond: 450_000,
+        audioBitsPerSecond: 64_000,
       });
-      return;
+    } catch {
+      try {
+        recorder = mimeType
+          ? new MediaRecorder(mediaStream, { mimeType })
+          : new MediaRecorder(mediaStream);
+      } catch (err) {
+        Promise.resolve().then(() => {
+          if (mountedRef.current) {
+            setLastUploadError(extractError(err, "Could not start camera/audio recorder."));
+          }
+        });
+        return;
+      }
     }
 
     recorderRef.current = recorder;

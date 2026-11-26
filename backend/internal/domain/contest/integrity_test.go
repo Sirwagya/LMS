@@ -368,8 +368,11 @@ func TestValidateProctorMediaInput(t *testing.T) {
 		wantExt  string
 	}{
 		{"video/webm;codecs=vp8,opus", "video/webm", "webm"},
+		{`video/mp4; codecs="avc1.42E01E, mp4a.40.2"`, "video/mp4", "mp4"},
 		{"video/mp4", "video/mp4", "mp4"},
+		{"video/quicktime", "video/quicktime", "mov"},
 		{"audio/webm;codecs=opus", "audio/webm", "webm"},
+		{"audio/mp4", "audio/mp4", "m4a"},
 		{"image/jpeg", "image/jpeg", "jpg"},
 		{"image/png", "image/png", "png"},
 	}
