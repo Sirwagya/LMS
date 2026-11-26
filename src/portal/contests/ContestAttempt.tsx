@@ -6,6 +6,7 @@ import type { Language } from "../coding/types";
 import { contestTime } from "./types";
 import { useContestAttempt, type Answer, type CodingSubmission, type Question } from "./useContestAttempt";
 import { useContestIntegrity } from "./useContestIntegrity";
+import { useContestLockdown } from "./useContestLockdown";
 import { useContestProctoring } from "./useContestProctoring";
 import { useContestFeatures } from "./useContestsEnabled";
 import "./contestAttempt.css";
@@ -68,6 +69,8 @@ export function ContestAttempt({ id }: { id: string }) {
   const [selected, setSelected] = useState(0);
   const [flags, setFlags] = useState<Set<number>>(() => new Set());
   const [review, setReview] = useState(false);
+  const [confirmedWarnings, setConfirmedWarnings] = useState(0);
+  const [autoSubmitted, setAutoSubmitted] = useState(false);
   const { integrityEnabled } = useContestFeatures();
   const { view, answers, dirty, saving, busy, localDurable, error, sizeError, remaining, open, flush, edit, submitCode, submittingCode, codeError } = useContestAttempt(id, user.id);
   const integrity = useContestIntegrity({
@@ -78,6 +81,10 @@ export function ContestAttempt({ id }: { id: string }) {
     selectedQuestion: selected,
     reviewMode: review,
     attemptError: error,
+    onLockdownStatus: (warnings, submitted) => {
+      setConfirmedWarnings((count) => Math.max(count, warnings));
+      if (submitted) setAutoSubmitted(true);
+    },
   });
   const proctor = useContestProctoring({
     contestId: id,
@@ -88,15 +95,32 @@ export function ContestAttempt({ id }: { id: string }) {
     onProctorEvent: integrity.recordProctorEvent,
   });
   const proctoredDesktop = integrityEnabled && transport.isDesktop;
+  const lockdown = useContestLockdown(
+    proctoredDesktop, view?.state === "active",
+    Math.max(confirmedWarnings, view?.lockdownWarnings ?? 0),
+    (reason) => integrity.recordProctorEvent("lockdown.warning", { reason }),
+  );
+  useEffect(() => {
+    if (!autoSubmitted || view?.state !== "active" || busy || saving || submittingCode) return;
+    const timeout = window.setTimeout(() => void open("state"), error ? 2000 : 0);
+    return () => window.clearTimeout(timeout);
+  }, [autoSubmitted, view, busy, saving, submittingCode, error, open]);
+
+  const releaseLockdown = lockdown.release;
+  useEffect(() => {
+    if (view && view.state !== "active" && !busy && (view.state !== "ready" || error)) releaseLockdown();
+  }, [view, busy, error, releaseLockdown]);
+
   const question = view?.questions?.[selected];
   const answer = answers[selected];
-  const locked = busy || remaining === 0 || error.startsWith("Saved answers changed") || error.startsWith("Your saved answers changed");
+  const locked = lockdown.closing || busy || remaining === 0 || error.startsWith("Saved answers changed") || error.startsWith("Your saved answers changed");
   const minutes = Math.floor(remaining / 60);
   const timer = `${minutes}:${String(remaining % 60).padStart(2, "0")}`;
 
   return (
     <section className="contest-session">
       <a href="#/dashboard" onClick={(event) => {
+        if (view?.state === "active" && lockdown.closing) { event.preventDefault(); return; }
         if (dirty && !localDurable && !window.confirm("Leave with changes that have not been saved?")) event.preventDefault();
       }}>← Dashboard</a>
       <h1>{view?.title ?? "Contest"}</h1>
@@ -272,11 +296,14 @@ export function ContestAttempt({ id }: { id: string }) {
               </div>
             </section>
           )}
+          {view.state === "ready" && proctoredDesktop && (
+            <p>Starting clears the Mac clipboard. Paste is blocked. Switch off Siri in System Settings before starting. Three lockdown warnings submit the attempt for faculty review.</p>
+          )}
           {view.state === "ready" ? (
             <button
               className="btn btn-primary"
-              disabled={busy || (proctoredDesktop && !proctor.allChecksPassed)}
-              onClick={() => void open("start")}
+              disabled={busy || lockdown.busy || (proctoredDesktop && !proctor.allChecksPassed)}
+              onClick={async () => { if (await lockdown.prepare(true)) await open("start"); }}
             >
               Start contest
             </button>
@@ -285,6 +312,7 @@ export function ContestAttempt({ id }: { id: string }) {
           )}
         </div>
       )}
+      {view?.state === "ready" && lockdown.notice && <p role="alert">{lockdown.notice}</p>}
       {view?.state === "closed" && <p>This contest has closed.</p>}
       {view?.state === "cancelled" && <p>This contest was cancelled.</p>}
       {view?.state === "occupied" && (
@@ -297,7 +325,9 @@ export function ContestAttempt({ id }: { id: string }) {
         <>
           <div className="contest-banner">
             <h2>Submission received</h2>
-            <p>{view.finishReason === "expired" ? "The deadline passed and the server submitted your last saved answers." : "Your answers were submitted."}</p>
+            <p>{view.finishReason === "lockdown"
+              ? "The server submitted your last saved answers after three warnings and flagged the attempt for faculty review."
+              : view.finishReason === "expired" ? "The deadline passed and the server submitted your last saved answers." : "Your answers were submitted."}</p>
             {view.submittedAt && <p>Submitted {contestTime(view.submittedAt)} · {Object.keys(view.answers ?? {}).length} answered</p>}
             {view.gradingStatus && <p role="status">{gradingMessage[view.gradingStatus]}</p>}
             <p className="contest-receipt">Receipt {view.attemptId}</p>
@@ -342,6 +372,12 @@ export function ContestAttempt({ id }: { id: string }) {
             ) : null}
           </div>
           {sizeError && <p role="alert">{sizeError}</p>}
+          {proctoredDesktop && lockdown.warnings > 0 && (
+            <div className="contest-banner" role="alert">
+              <strong>Lockdown warnings {lockdown.warnings} of 3</strong>
+              <p>{lockdown.closing ? "Closing the attempt. Waiting for the server receipt." : lockdown.notice}</p>
+            </div>
+          )}
           {proctoredDesktop && proctor.lockdownViolation && (
             <div
               className="contest-lockdown-overlay"
@@ -445,8 +481,8 @@ export function ContestAttempt({ id }: { id: string }) {
             </div>
           )}
           <div
-            className={proctoredDesktop && proctor.lockdownViolation ? "contest-workspace is-locked" : "contest-workspace"}
-            aria-hidden={proctoredDesktop && proctor.lockdownViolation ? true : undefined}
+            className={proctoredDesktop && (proctor.lockdownViolation || lockdown.closing) ? "contest-workspace is-locked" : "contest-workspace"}
+            inert={proctoredDesktop && (proctor.lockdownViolation || lockdown.closing)}
           >
             <nav className="contest-navigation" aria-label="Contest questions">
               {view.questions?.map((_, index) => (

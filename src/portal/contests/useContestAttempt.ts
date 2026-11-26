@@ -25,7 +25,8 @@ type Attempt = ContestSummary & {
   attemptId?: string;
   deadlineAt?: string;
   submittedAt?: string;
-  finishReason?: "manual" | "expired";
+  finishReason?: "manual" | "expired" | "lockdown";
+  lockdownWarnings: number;
   lease: number;
   revision: number;
   answers: Answers | null;

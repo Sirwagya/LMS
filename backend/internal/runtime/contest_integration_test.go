@@ -258,7 +258,7 @@ func TestContestMigrationRollbackOnDisposableDB(t *testing.T) {
 		t.Fatalf("initial Up failed: %v", err)
 	}
 	assertTables(true)
-	assertMigrationCount(9)
+	assertMigrationCount(10)
 
 	if err := migrations.Down(ctx, pool); err != nil {
 		t.Fatalf("Down failed: %v", err)
@@ -269,7 +269,7 @@ func TestContestMigrationRollbackOnDisposableDB(t *testing.T) {
 	if err := migrations.Up(ctx, pool); err != nil {
 		t.Fatalf("re-apply Up failed: %v", err)
 	}
-	assertMigrationCount(9)
+	assertMigrationCount(10)
 	assertTables(true)
 }
 

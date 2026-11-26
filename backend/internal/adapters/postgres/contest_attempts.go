@@ -20,6 +20,7 @@ func NewContestAttemptRepo(tx *TxManager) *ContestAttemptRepo {
 }
 
 type attemptRow struct {
+	warnings           int
 	id, device, reason string
 	lease, revision    int64
 	started, deadline  time.Time
@@ -95,6 +96,7 @@ func (r *ContestAttemptRepo) Execute(ctx context.Context, id, student string, cm
 			return nil
 		}
 
+		view.LockdownWarnings = attempt.warnings
 		view.AttemptID, view.StartedAt, view.DeadlineAt = attempt.id, &attempt.started, &attempt.deadline
 		if attempt.submitted == nil && cancelledAt != nil && cancelledAt.Before(attempt.deadline) {
 			view.State = "cancelled"
@@ -189,10 +191,10 @@ func (r *ContestAttemptRepo) lock(ctx context.Context, assessmentID, student str
 	var data, saved []byte
 	err := r.tx.Querier(ctx).QueryRow(ctx, `
 		SELECT id::text,device_id::text,lease,answer_revision,started_at,deadline_at,
-		       submitted_at,COALESCE(finish_reason,''),answers,scoring_enabled,choice_saved_at
+		       submitted_at,COALESCE(finish_reason,''),answers,scoring_enabled,choice_saved_at,lockdown_warnings
 		FROM assessment_attempts WHERE assessment_id=$1 AND student_id=$2 FOR UPDATE
 	`, assessmentID, student).Scan(&a.id, &a.device, &a.lease, &a.revision, &a.started, &a.deadline,
-		&a.submitted, &a.reason, &data, &a.scored, &saved)
+		&a.submitted, &a.reason, &data, &a.scored, &saved, &a.warnings)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, false, nil
 	}

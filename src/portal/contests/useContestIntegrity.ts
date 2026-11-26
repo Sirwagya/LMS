@@ -17,7 +17,8 @@ export type IntegrityEventType =
   | "app.opened"
   | "proctor.camera_lost"
   | "proctor.mic_lost"
-  | "proctor.screen_lost";
+  | "proctor.screen_lost"
+  | "lockdown.warning";
 
 export type IntegrityEvent = {
   seq: number;
@@ -35,6 +36,7 @@ export type UseContestIntegrityOptions = {
   selectedQuestion: number;
   reviewMode: boolean;
   attemptError?: string;
+  onLockdownStatus?: (warnings: number, submitted: boolean) => void;
 };
 
 const MAX_CODE_PREVIEW = 4000;
@@ -76,6 +78,19 @@ function seqStorageKey(userId: string, attemptId: string): string {
   return `vedam-contest-seq:${userId}:${attemptId}`;
 }
 
+function lockdownStorageKey(userId: string, attemptId: string, deviceId: string): string {
+  return `vedam-lockdown-warnings:${userId}:${attemptId}:${deviceId}`;
+}
+
+function readLockdownWarnings(key: string): IntegrityEvent[] {
+  try {
+    const events = JSON.parse(localRead(key) || "[]") as IntegrityEvent[];
+    return Array.isArray(events) ? events.filter((event) => event.eventType === "lockdown.warning").slice(0, 3) : [];
+  } catch {
+    return [];
+  }
+}
+
 function readPersistedSeq(userId: string, attemptId: string): number {
   const raw = localRead(seqStorageKey(userId, attemptId));
   if (!raw) return 0;
@@ -108,6 +123,7 @@ export function useContestIntegrity({
   selectedQuestion,
   reviewMode,
   attemptError = "",
+  onLockdownStatus,
 }: UseContestIntegrityOptions) {
   const [deviceId] = useState(readDeviceId);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(() =>
@@ -128,6 +144,9 @@ export function useContestIntegrity({
   const sessionRef = useRef<{ contestId: string; userId: string; attemptId: string; deviceId: string } | null>(null);
   const flushBatchRef = useRef<() => Promise<void>>(async () => {});
 
+  const lockdownStatusRef = useRef(onLockdownStatus);
+  useEffect(() => { lockdownStatusRef.current = onLockdownStatus; }, [onLockdownStatus]);
+
   const clearRetryTimer = useCallback(() => {
     if (retryTimerRef.current !== null) {
       window.clearTimeout(retryTimerRef.current);
@@ -144,19 +163,30 @@ export function useContestIntegrity({
     flushingRef.current = true;
     try {
       if (!pendingBatchRef.current) {
-        const events = queueRef.current.splice(0, MAX_BATCH_SIZE);
+        const firstOptional = queueRef.current.findIndex(({ eventType }) => eventType !== "lockdown.warning");
+        const firstWarning = queueRef.current[0]?.eventType === "lockdown.warning";
+        const size = firstWarning && firstOptional > 0 ? firstOptional : MAX_BATCH_SIZE;
+        const events = queueRef.current.splice(0, size);
         pendingBatchRef.current = {
           batchId: crypto.randomUUID(),
           events,
         };
       }
       const batch = pendingBatchRef.current;
-      await api(`/contests/${active.contestId}/events`, "POST", {
+      const result = await api<{ lockdownWarnings?: number; lockdownSubmitted?: boolean }>(
+        `/contests/${active.contestId}/events`, "POST", {
         attemptId: active.attemptId,
         deviceId: active.deviceId,
         batchId: batch.batchId,
         events: batch.events,
       });
+      if (batch.events.some((event) => event.eventType === "lockdown.warning")) {
+        const key = lockdownStorageKey(active.userId, active.attemptId, active.deviceId);
+        const acknowledged = new Set(batch.events.map(({ seq }) => seq));
+        localWrite(key, JSON.stringify(readLockdownWarnings(key).filter(({ seq }) => !acknowledged.has(seq))));
+      }
+      if (sessionRef.current !== active) return;
+      lockdownStatusRef.current?.(result.lockdownWarnings ?? 0, result.lockdownSubmitted ?? false);
       pendingBatchRef.current = null;
       retryCountRef.current = 0;
 
@@ -165,7 +195,14 @@ export function useContestIntegrity({
           void flushBatchRef.current();
         }, 50);
       }
-    } catch {
+    } catch (error) {
+      if (sessionRef.current !== active) return;
+      if (error instanceof Error && error.message === "Client event quota exceeded for this attempt." &&
+          pendingBatchRef.current?.events.every(({ eventType }) => eventType !== "lockdown.warning")) {
+        pendingBatchRef.current = null;
+        window.setTimeout(() => void flushBatchRef.current(), 50);
+        return;
+      }
       retryCountRef.current += 1;
       const delay = Math.min(30_000, 2000 * Math.pow(2, Math.min(4, retryCountRef.current - 1)));
       retryTimerRef.current = window.setTimeout(() => {
@@ -202,9 +239,18 @@ export function useContestIntegrity({
         payload,
       };
       if (queueRef.current.length >= MAX_QUEUE_SIZE) {
-        queueRef.current.shift();
+        const firstOptional = queueRef.current.findIndex((queued) => queued.eventType !== "lockdown.warning");
+        if (firstOptional >= 0) queueRef.current.splice(firstOptional, 1);
       }
-      queueRef.current.push(event);
+      if (type === "lockdown.warning") {
+        const key = lockdownStorageKey(active.userId, active.attemptId, active.deviceId);
+        localWrite(key, JSON.stringify([...readLockdownWarnings(key), event].slice(0, 3)));
+        const firstOptional = queueRef.current.findIndex((queued) => queued.eventType !== "lockdown.warning");
+        if (firstOptional < 0) queueRef.current.push(event);
+        else queueRef.current.splice(firstOptional, 0, event);
+      } else {
+        queueRef.current.push(event);
+      }
 
       if (queueRef.current.length >= 10) {
         void flushBatch();
@@ -267,13 +313,15 @@ export function useContestIntegrity({
     }
 
     sessionRef.current = { contestId, userId, attemptId, deviceId };
-    seqRef.current = readPersistedSeq(userId, attemptId);
-    queueRef.current = [];
+    const queuedWarnings = readLockdownWarnings(lockdownStorageKey(userId, attemptId, deviceId));
+    seqRef.current = Math.max(readPersistedSeq(userId, attemptId), ...queuedWarnings.map(({ seq }) => seq));
+    queueRef.current = queuedWarnings;
     pendingBatchRef.current = null;
     retryCountRef.current = 0;
     lastHeartbeatRef.current = Date.now();
     lastNavRef.current = null;
     const tracks = codeTracksRef.current;
+    if (queuedWarnings.length) void flushBatch();
 
     const flushTimer = window.setInterval(() => {
       void flushBatch();

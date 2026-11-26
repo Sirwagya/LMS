@@ -20,6 +20,12 @@ The LMS worker posts JSON with `language`, `source`, `entrypoint` (`stdin`), and
 
 A production rollout requires provisioning and verifying an isolated execution service. The judge supervisor holds the judge token and launches disposable workers with no network, no LMS credentials, bounded resources, and cleanup on completion or timeout. Keep expected outputs inside the supervisor and limit each execution to its test input. Verify containment and failure recovery before enabling scored contests. The grading preview integration uses a mock judge, with actual code execution left to the isolated service.
 
+### macOS lockdown preview
+
+Starting a proctored contest clears the system clipboard after disclosure. The app blocks paste and drop and uses macOS presentation settings to restrict Command-Tab while the app is active. Leaving fullscreen or losing focus counts as one warning until the student returns. The server commits the third warning, freezes the last saved work and official coding submissions, and adds the attempt to faculty review. Browser events are observations and faculty decide the review outcome.
+
+This recording-enabled preview uses AppKit presentation controls. Institution-managed Siri restrictions or Apple Automatic Assessment Configuration are required for OS-level prevention. Apple's assessment mode requires an approved entitlement and disables screen capture, so switching to it requires a separate capture policy and signed-device testing.
+
 ## Teacher workflow
 
 1. In **Staff → Contests**, create a draft with a title, audience, instructions, opening time, closing time, attempt duration, and allowed resources. Show the timezone and preview exactly what students will see.

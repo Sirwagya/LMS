@@ -79,18 +79,29 @@ func (r *ContestIntegrityRepo) IngestEvents(ctx context.Context, assessmentID, s
 
 	err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
 		q := r.tx.Querier(ctx)
-		var lockedDevice string
+		// Match attempt writes: lock the assessment before the attempt so cancellation
+		// and lockdown submission observe a single ordering.
+		var cancelledAt *time.Time
+		if err := q.QueryRow(ctx, `SELECT cancelled_at FROM assessments WHERE id=$1 FOR SHARE`, aid).Scan(&cancelledAt); err != nil {
+			return mapPGError(err)
+		}
+		var lockedDevice, finishReason string
 		var submittedAt *time.Time
-		var now time.Time
+		var deadline, now time.Time
+		var warningCount int
 		err := q.QueryRow(ctx, `
-			SELECT device_id::text, submitted_at, clock_timestamp()
+			SELECT device_id::text, submitted_at, deadline_at, lockdown_warnings, COALESCE(finish_reason,'')
 			FROM assessment_attempts
 			WHERE id = $1::uuid AND assessment_id = $2::uuid AND student_id = $3
 			FOR UPDATE
-		`, attemptID, aid, studentID).Scan(&lockedDevice, &submittedAt, &now)
+		`, attemptID, aid, studentID).Scan(&lockedDevice, &submittedAt, &deadline, &warningCount, &finishReason)
 		if err != nil {
 			return mapPGError(err)
 		}
+		if err := q.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&now); err != nil {
+			return err
+		}
+		result.LockdownWarnings, result.LockdownSubmitted = warningCount, finishReason == "lockdown"
 		if lockedDevice != deviceID {
 			return errs.New(errs.ErrConflict, "ATTEMPT_DEVICE_MISMATCH", "This device session is no longer active for the attempt.")
 		}
@@ -113,12 +124,7 @@ func (r *ContestIntegrityRepo) IngestEvents(ctx context.Context, assessmentID, s
 				return err
 			}
 			highest, missing := contest.MissingSeqs(seqs)
-			result = contest.EventBatchResult{
-				Accepted:    0,
-				Duplicate:   true,
-				HighestSeq:  highest,
-				MissingSeqs: missing,
-			}
+			result.Duplicate, result.HighestSeq, result.MissingSeqs = true, highest, missing
 			return nil
 		}
 
@@ -129,7 +135,15 @@ func (r *ContestIntegrityRepo) IngestEvents(ctx context.Context, assessmentID, s
 		`, attemptID).Scan(&existingCount); err != nil {
 			return mapPGError(err)
 		}
-		if existingCount+len(batch.Events) > contest.MaxAttemptClientEvents {
+		limit := contest.MaxAttemptClientEvents
+		warningBatch := true
+		for _, event := range batch.Events {
+			warningBatch = warningBatch && event.EventType == "lockdown.warning"
+		}
+		if warningBatch {
+			limit += contest.MaxLockdownWarnings
+		}
+		if existingCount+len(batch.Events) > limit {
 			return errs.New(errs.ErrRateLimited, "CONTEST_EVENT_QUOTA", "Client event quota exceeded for this attempt.")
 		}
 
@@ -169,20 +183,44 @@ func (r *ContestIntegrityRepo) IngestEvents(ctx context.Context, assessmentID, s
 			return mapPGError(err)
 		}
 
-		tag, err := q.Exec(ctx, `
+		var accepted, newWarnings int
+		err = q.QueryRow(ctx, `
+   WITH inserted AS (
 			INSERT INTO assessment_attempt_events (
 				attempt_id, seq, batch_id, source_kind, event_type, question_index, client_at, payload
 			)
 			SELECT $1::uuid, u.seq, $2::uuid, 'client', u.event_type, u.question_index, u.client_at, u.payload::jsonb
 			FROM unnest($3::bigint[], $4::text[], $5::int[], $6::timestamptz[], $7::text[])
 				AS u(seq, event_type, question_index, client_at, payload)
-			ON CONFLICT (attempt_id, seq) DO NOTHING
-		`, attemptID, batchID, seqs, eventTypes, qIndexes, clientAts, payloads)
+			ON CONFLICT (attempt_id, seq) DO NOTHING RETURNING event_type
+   )
+   SELECT count(*), count(*) FILTER (WHERE event_type='lockdown.warning') FROM inserted
+		`, attemptID, batchID, seqs, eventTypes, qIndexes, clientAts, payloads).Scan(&accepted, &newWarnings)
 		if err != nil {
 			return mapPGError(err)
 		}
 
 		signals := contest.DetectBatchSignals(batch.Events)
+		if newWarnings > 0 && submittedAt == nil && cancelledAt == nil && now.Before(deadline) {
+			warningCount = min(contest.MaxLockdownWarnings, warningCount+newWarnings)
+			autoSubmit := warningCount == contest.MaxLockdownWarnings
+			if _, err := q.Exec(ctx, `
+    UPDATE assessment_attempts SET lockdown_warnings=$2,
+      submitted_at=CASE WHEN $3 THEN $4 ELSE submitted_at END,
+      finish_reason=CASE WHEN $3 THEN 'lockdown' ELSE finish_reason END
+    WHERE id=$1
+   `, attemptID, warningCount, autoSubmit, now); err != nil {
+				return mapPGError(err)
+			}
+			result.LockdownWarnings, result.LockdownSubmitted = warningCount, autoSubmit
+			if autoSubmit {
+				// Prefer this aggregate signal when the review record reaches its signal cap.
+				signals = append([]contest.ReviewSignal{{
+					Kind: "lockdown_auto_submit", Summary: "Automatically submitted after three lockdown warnings. Review the attempt timeline.", Severity: "high",
+				}}, signals...)
+			}
+		}
+
 		var blurCount, takeoverCount int
 		if err := q.QueryRow(ctx, `
 			SELECT
@@ -215,12 +253,7 @@ func (r *ContestIntegrityRepo) IngestEvents(ctx context.Context, assessmentID, s
 			return err
 		}
 		highest, missing := contest.MissingSeqs(allSeqs)
-		result = contest.EventBatchResult{
-			Accepted:    int(tag.RowsAffected()),
-			Duplicate:   false,
-			HighestSeq:  highest,
-			MissingSeqs: missing,
-		}
+		result.Accepted, result.HighestSeq, result.MissingSeqs = accepted, highest, missing
 		return nil
 	})
 	return result, err
@@ -324,6 +357,9 @@ func mergeSignals(existing, incoming []contest.ReviewSignal) []contest.ReviewSig
 			continue
 		}
 		if len(out) >= 100 {
+			if s.Kind == "lockdown_auto_submit" {
+				out[len(out)-1] = s
+			}
 			continue
 		}
 		seen[k] = len(out)

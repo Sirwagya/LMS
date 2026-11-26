@@ -142,9 +142,7 @@ pub fn filter_disallowed_apps_with_allowlist(
     extra_allowlist: &[String],
 ) -> Vec<RunningApp> {
     apps.into_iter()
-        .filter(|app| {
-            !is_allowed_process(app, self_pid) && !is_extra_allowed(app, extra_allowlist)
-        })
+        .filter(|app| !is_allowed_process(app, self_pid) && !is_extra_allowed(app, extra_allowlist))
         .collect()
 }
 
@@ -662,5 +660,64 @@ mod tests {
                 },
             ]
         );
+    }
+}
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    static PREVIOUS_PRESENTATION: std::cell::Cell<Option<objc2_app_kit::NSApplicationPresentationOptions>> =
+        const { std::cell::Cell::new(None) };
+}
+
+#[tauri::command]
+pub async fn lms_proctor_lockdown(
+    app: tauri::AppHandle,
+    enabled: bool,
+    clear_clipboard: bool,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::{
+            NSApplication, NSApplicationPresentationOptions as Options, NSPasteboard,
+        };
+
+        let (reply, result) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let Some(main) = MainThreadMarker::new() else {
+                let _ = reply.send(Err("Unable to configure contest lockdown.".to_string()));
+                return;
+            };
+            let app = NSApplication::sharedApplication(main);
+            PREVIOUS_PRESENTATION.with(|previous| {
+                if enabled {
+                    let current = app.presentationOptions();
+                    if previous.get().is_none() {
+                        previous.set(Some(current));
+                    }
+                    let mut options = current;
+                    options.remove(Options::AutoHideDock | Options::AutoHideMenuBar);
+                    options.insert(
+                        Options::HideDock | Options::HideMenuBar | Options::DisableProcessSwitching,
+                    );
+                    app.setPresentationOptions(options);
+                    if clear_clipboard {
+                        NSPasteboard::generalPasteboard().clearContents();
+                    }
+                } else if let Some(original) = previous.take() {
+                    app.setPresentationOptions(original);
+                }
+            });
+            let _ = reply.send(Ok(()));
+        })
+        .map_err(|e| e.to_string())?;
+        result
+            .await
+            .map_err(|_| "Unable to configure contest lockdown.".to_string())?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, enabled, clear_clipboard);
+        Err("Contest lockdown requires macOS.".to_string())
     }
 }

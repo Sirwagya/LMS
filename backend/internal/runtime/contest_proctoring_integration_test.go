@@ -200,6 +200,65 @@ func TestContestProctoringWorkflow(t *testing.T) {
 		t.Fatalf("proctor events ingest failed: status=%d err=%v raw=%s", evRes.status, err, evRes.raw)
 	}
 
+	attemptPath := "/api/v1/contests/" + created.ID + "/attempt"
+	saved, err := api.callWithHeaders(t.Context(), http.MethodPost, attemptPath, student.Token, "", map[string]any{
+		"action": "save", "deviceId": devA, "lease": viewA.Lease, "revision": viewA.Revision,
+		"answers": map[int]contest.Answer{0: {Choice: &chosen}},
+	}, nativeHeaders)
+	if err != nil || saved.status != http.StatusOK {
+		t.Fatalf("save before warnings: %d %s (%v)", saved.status, saved.raw, err)
+	}
+	warnings := func(batchID, device, reason string, seq int64, status int) contest.EventBatchResult {
+		t.Helper()
+		res, err := api.callWithHeaders(t.Context(), http.MethodPost, "/api/v1/contests/"+created.ID+"/events", student.Token, "",
+			contest.EventBatchInput{AttemptID: viewA.AttemptID, DeviceID: device, BatchID: batchID, Events: []contest.EventInput{{
+				Seq: seq, EventType: "lockdown.warning", Payload: map[string]any{"reason": reason},
+			}}}, nativeHeaders)
+		if err != nil || res.status != status {
+			t.Fatalf("warning: status=%d body=%s (%v)", res.status, res.raw, err)
+		}
+		if status != http.StatusOK {
+			return contest.EventBatchResult{}
+		}
+		return decode[contest.EventBatchResult](t, res)
+	}
+	batch := uuid.NewString()
+	warnings(uuid.NewString(), devA, "invalid", 5, http.StatusBadRequest)
+	warnings(uuid.NewString(), devB, "paste_blocked", 5, http.StatusConflict)
+	if first := warnings(batch, devA, "left_contest", 5, http.StatusOK); first.LockdownWarnings != 1 || first.LockdownSubmitted {
+		t.Fatalf("first warning: %#v", first)
+	}
+	if duplicate := warnings(batch, devA, "left_contest", 5, http.StatusOK); duplicate.LockdownWarnings != 1 || !duplicate.Duplicate {
+		t.Fatalf("duplicate warning: %#v", duplicate)
+	}
+	if overlap := warnings(uuid.NewString(), devA, "left_contest", 5, http.StatusOK); overlap.LockdownWarnings != 1 || overlap.Accepted != 0 {
+		t.Fatalf("overlapping warning: %#v", overlap)
+	}
+	if second := warnings(uuid.NewString(), devA, "paste_blocked", 6, http.StatusOK); second.LockdownWarnings != 2 || second.LockdownSubmitted {
+		t.Fatalf("second warning: %#v", second)
+	}
+	thirdBatch := uuid.NewString()
+	for range 2 {
+		third := warnings(thirdBatch, devA, "left_contest", 7, http.StatusOK)
+		if !third.LockdownSubmitted || third.LockdownWarnings != 3 {
+			t.Fatalf("third warning: %#v", third)
+		}
+	}
+	if later := warnings(uuid.NewString(), devA, "paste_blocked", 8, http.StatusOK); later.LockdownWarnings != 3 || !later.LockdownSubmitted {
+		t.Fatalf("late warning: %#v", later)
+	}
+	after, err := api.callWithHeaders(t.Context(), http.MethodPost, attemptPath, student.Token, "", map[string]any{
+		"action": "save", "deviceId": devA, "lease": viewA.Lease, "revision": 1, "answers": map[int]contest.Answer{},
+	}, nativeHeaders)
+	if err != nil || after.status != http.StatusOK {
+		t.Fatalf("closed attempt: %d %s (%v)", after.status, after.raw, err)
+	}
+	receipt := decode[contest.AttemptView](t, after)
+	if receipt.State != "submitted" || receipt.FinishReason != "lockdown" || receipt.LockdownWarnings != 3 ||
+		receipt.Answers[0].Choice == nil || *receipt.Answers[0].Choice != chosen || receipt.Revision != 1 {
+		t.Fatalf("the third warning did not freeze saved answers: %#v", receipt)
+	}
+
 	queue := decode[contest.ReviewQueueView](t, requireStatus(t, api, http.StatusOK, http.MethodGet, "/api/staff/contests/"+created.ID+"/integrity", teacher.Token, "", nil))
 	var reviewA contest.ReviewSummary
 	for _, rv := range queue.Reviews {
@@ -214,7 +273,7 @@ func TestContestProctoringWorkflow(t *testing.T) {
 	for _, sig := range reviewA.Signals {
 		seenSignals[sig.Kind] = sig.Severity
 	}
-	for _, kind := range []string{"app_opened", "proctor_camera_lost", "proctor_mic_lost", "proctor_screen_lost"} {
+	for _, kind := range []string{"app_opened", "proctor_camera_lost", "proctor_mic_lost", "proctor_screen_lost", "lockdown_auto_submit"} {
 		if seenSignals[kind] != "high" {
 			t.Fatalf("expected high-severity signal %q, got signals=%+v", kind, reviewA.Signals)
 		}

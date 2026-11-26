@@ -42,11 +42,15 @@ type EventBatchInput struct {
 	Events    []EventInput `json:"events"`
 }
 
+const MaxLockdownWarnings = 3
+
 type EventBatchResult struct {
-	Accepted    int     `json:"accepted"`
-	Duplicate   bool    `json:"duplicate"`
-	HighestSeq  int64   `json:"highestSeq"`
-	MissingSeqs []int64 `json:"missingSeqs"`
+	LockdownWarnings  int     `json:"lockdownWarnings"`
+	LockdownSubmitted bool    `json:"lockdownSubmitted"`
+	Accepted          int     `json:"accepted"`
+	Duplicate         bool    `json:"duplicate"`
+	HighestSeq        int64   `json:"highestSeq"`
+	MissingSeqs       []int64 `json:"missingSeqs"`
 }
 
 type ReplayEvent struct {
@@ -224,6 +228,7 @@ var validClientEventTypes = map[string]bool{
 	"proctor.camera_lost": true,
 	"proctor.mic_lost":    true,
 	"proctor.screen_lost": true,
+	"lockdown.warning":    true,
 }
 
 var validProctorMediaKinds = map[string]bool{
@@ -339,6 +344,12 @@ func ValidateEvent(ev EventInput) error {
 	}
 	if hasProhibitedPrivacyKey(payload) {
 		return Invalid("Event payload contains prohibited privacy fields.")
+	}
+	if ev.EventType == "lockdown.warning" {
+		reason, _ := payload["reason"].(string)
+		if len(payload) != 1 || ev.QuestionIndex != nil || (reason != "left_contest" && reason != "paste_blocked") {
+			return Invalid("Provide a supported lockdown warning reason.")
+		}
 	}
 	if ev.EventType == "editor.paste" {
 		if _, ok := ExtractCharCount(payload); !ok {

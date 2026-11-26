@@ -42,6 +42,7 @@ type StudentQuestion struct {
 }
 
 type AttemptView struct {
+	LockdownWarnings int `json:"lockdownWarnings"`
 	Summary
 	Instructions       string             `json:"instructions"`
 	State              string             `json:"state"`
