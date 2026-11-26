@@ -70,6 +70,7 @@ export type StudentReport = {
   codingPossiblePoints?: number;
   elapsedMs?: number | null;
   releaseExplanations?: boolean;
+  breakdown?: ReportQuestion[];
   questions?: ReportQuestion[];
 };
 
@@ -109,8 +110,12 @@ function questionPoints(q: ReportQuestion): { earned: number; possible: number }
   return { earned: q.score ?? q.points ?? 0, possible: q.points ?? 0 };
 }
 
+function reportQuestions(report: StudentReport): ReportQuestion[] {
+  return report.breakdown ?? report.questions ?? [];
+}
+
 function questionBreakdownTotals(report: StudentReport) {
-  const questions = report.questions ?? [];
+  const questions = reportQuestions(report);
   let mcqEarned = 0;
   let mcqPossible = 0;
   let codingEarned = 0;
@@ -492,18 +497,18 @@ export function ContestResults({ id }: { id: string }) {
             <SectionHeader
               title="Question breakdown"
               detail={
-                report.releaseExplanations
+                report.releaseExplanations || reportQuestions(report).some((q) => Boolean(q.explanation))
                   ? "Explanations are enabled for this release."
                   : undefined
               }
             />
-            {!report.questions?.length ? (
+            {reportQuestions(report).length === 0 ? (
               <div className="panel panel-padding">
                 <p className="muted">No question-level details are attached to this report.</p>
               </div>
             ) : (
               <ol className="contest-report-questions">
-                {report.questions.map((question, idx) => {
+                {reportQuestions(report).map((question, idx) => {
                   const number = (question.questionIndex ?? question.index ?? idx) + 1;
                   const { earned, possible } = questionPoints(question);
                   const verdict = questionVerdict(question, earned, possible);
