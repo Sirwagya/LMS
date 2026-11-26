@@ -8,7 +8,7 @@ Replay records activity inside the contest, including code changes. Screen, webc
 
 ## Authoring preview
 
-Set `LMS_CONTEST_AUTHORING=true` for the local API to enable **Staff → Contests** and the student dashboard's contest schedule. The current slice supports drafting, preview, publishing, cancellation, and cohort visibility. Start, grading, replay, reports, and rankings follow on their own branches.
+Set `LMS_CONTEST_AUTHORING=true` for the local API to enable **Staff → Contests** and the student dashboard's contest schedule. This enables drafting, preview, publishing, cancellation, and cohort visibility. Also set `LMS_CONTEST_ATTEMPTS=true` for the API and worker to preview timed attempts in the macOS app. In this preview students can save MCQ answers and Python or Java drafts, switch devices, and get a submission receipt. The worker finalizes expired attempts. Grading, replay, reports, and rankings follow on their own branches.
 
 ## Teacher workflow
 

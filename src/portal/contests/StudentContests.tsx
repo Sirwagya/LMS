@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { SectionHeader } from "../../components/ui/Workspace";
-import { api } from "../api";
+import { api, transport } from "../api";
 import { contestTime, type ContestPage } from "./types";
-import { useContestsEnabled } from "./useContestsEnabled";
+import { useContestFeatures } from "./useContestsEnabled";
 
 export function StudentContests() {
-  const enabled = useContestsEnabled();
+  const { enabled, attemptsEnabled } = useContestFeatures();
   const [page, setPage] = useState<ContestPage | null>(null);
   const [index, setIndex] = useState(0);
   const [error, setError] = useState("");
@@ -40,6 +40,18 @@ export function StudentContests() {
                   {contest.status === "cancelled" ? <p>Cancelled</p> : (
                     <p className="muted">{contestTime(contest.opensAt)} – {contestTime(contest.closesAt)} · {contest.durationMinutes} min</p>
                   )}
+                  {attemptsEnabled && (contest.status !== "cancelled" || contest.attemptState === "submitted") &&
+                    (transport.isDesktop ? (
+                      <a className="btn btn-secondary" href={`#/contests/${contest.id}`}>
+                        {contest.attemptState === "submitted" ? "View receipt" : contest.attemptState === "active" ? "Resume contest" : "Open contest"}
+                      </a>
+                    ) : (
+                      <p className="muted">
+                        {contest.attemptState === "submitted" ? "Submitted · Receipt available in the LMS macOS app."
+                          : contest.attemptState === "active" ? "In progress · Resume in the LMS macOS app."
+                            : "Take this contest in the LMS macOS app."}
+                      </p>
+                    ))}
                 </li>
               ))}
             </ul>

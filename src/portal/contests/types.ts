@@ -5,6 +5,7 @@ export type ContestSummary = {
   opensAt: string;
   closesAt: string;
   durationMinutes: number;
+  attemptState?: "active" | "submitted" | "cancelled";
 };
 
 export type ContestPage = { items: ContestSummary[]; hasMore: boolean };

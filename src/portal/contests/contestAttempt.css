@@ -1,0 +1,110 @@
+.contest-shell {
+  min-height: 100vh;
+  padding: clamp(1rem, 4vw, 3rem);
+}
+
+.contest-session {
+  max-width: 74rem;
+  margin-inline: auto;
+  display: grid;
+  gap: 1rem;
+}
+
+.contest-banner,
+.contest-question {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: clamp(1rem, 3vw, 2rem);
+}
+
+.contest-banner,
+.contest-question,
+.contest-code,
+.contest-navigation {
+  display: grid;
+  gap: 0.875rem;
+  align-content: start;
+  justify-items: start;
+  min-width: 0;
+}
+
+.contest-status {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0.875rem 0;
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.contest-status [role="timer"] {
+  font-size: 1.625rem;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.contest-workspace {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(9rem, 12rem) minmax(0, 1fr);
+}
+
+.contest-navigation [aria-current="step"] {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.contest-question h2,
+.contest-banner h2 {
+  margin: 0;
+}
+
+.contest-prompt {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.contest-choices {
+  display: grid;
+  gap: 0.75rem;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.contest-choices label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.contest-code,
+.contest-code details,
+.contest-code .coding-editor {
+  width: 100%;
+  min-width: 0;
+}
+
+.contest-code pre,
+.contest-receipt {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 42rem) {
+  .contest-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .contest-navigation {
+    display: flex;
+    flex-wrap: wrap;
+  }
+}

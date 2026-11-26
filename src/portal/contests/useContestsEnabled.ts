@@ -1,14 +1,18 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 
-export function useContestsEnabled() {
-  const [enabled, setEnabled] = useState(false);
+export function useContestFeatures() {
+  const [features, setFeatures] = useState({ enabled: false, attemptsEnabled: false });
   useEffect(() => {
     let current = true;
-    void api<{ enabled: boolean }>("/contests/status")
-      .then((status) => { if (current) setEnabled(status.enabled); })
+    void api<typeof features>("/contests/status")
+      .then((status) => { if (current) setFeatures(status); })
       .catch(() => {});
     return () => { current = false; };
   }, []);
-  return enabled;
+  return features;
+}
+
+export function useContestsEnabled() {
+  return useContestFeatures().enabled;
 }
