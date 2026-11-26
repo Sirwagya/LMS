@@ -30,6 +30,10 @@ const ContestAttempt = React.lazy(() =>
   import("./portal/contests/ContestAttempt").then((m) => ({ default: m.ContestAttempt })),
 );
 
+const ContestResults = React.lazy(() =>
+  import("./portal/contests/ContestResults").then((m) => ({ default: m.ContestResults })),
+);
+
 const AppContent: React.FC = () => {
   const { route, currentSemester } = useLMS();
   const { user } = useSession();
@@ -48,6 +52,14 @@ const AppContent: React.FC = () => {
   const screenKey = route;
 
   const renderCurrentScreen = () => {
+    const contestResults = /^\/contests\/([a-f0-9-]{36})\/results$/.exec(route);
+    if (contestResults) {
+      return (
+        <React.Suspense fallback={<p role="status">Loading contest results…</p>}>
+          <ContestResults key={`${user.id}:${contestResults[1]}`} id={contestResults[1]} />
+        </React.Suspense>
+      );
+    }
     const learning = resolveLearningRoute(route, lecturesBySubject);
     if (learning?.assignment?.kind === "coding")
       return (

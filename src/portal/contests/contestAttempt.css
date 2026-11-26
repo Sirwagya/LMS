@@ -405,10 +405,165 @@
   overflow-wrap: anywhere;
 }
 
+.contest-inline-form input {
+  width: 100%;
+  min-height: 44px;
+  background: var(--canvas);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.contest-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.contest-result-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-top: 0.5rem;
+}
+
+.contest-result-summary-row:first-child {
+  padding-top: 0;
+}
+
+.contest-breakdown-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.contest-breakdown-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.625rem;
+  border: 1px solid var(--border);
+  background: var(--subtle);
+}
+
+.contest-report-questions {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 1rem;
+}
+
+.contest-report-question {
+  display: grid;
+  gap: 0.875rem;
+}
+
+.contest-mcq-review,
+.contest-coding-review,
+.contest-leaderboard-block {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.contest-choice-review {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.contest-choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.625rem 0.875rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--subtle);
+}
+
+.contest-choice-row.is-selected {
+  border-color: var(--accent);
+}
+
+.contest-choice-row.is-correct {
+  background: color-mix(in srgb, #16a34a 12%, var(--subtle));
+}
+
+.contest-explanation {
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--subtle);
+  display: grid;
+  gap: 0.375rem;
+}
+
+.contest-code-snapshot {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--canvas);
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.8125rem;
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.contest-self-pin {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: 0.625rem;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.contest-leaderboard-self {
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  font-weight: 600;
+}
+
+.contest-withhold-picker {
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  margin: 0;
+}
+
+.contest-withhold-picker legend {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 0.25rem;
+}
+
+.contest-withhold-list {
+  display: grid;
+  gap: 0.375rem;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
 @media (max-width: 42rem) {
   .contest-workspace,
   .contest-replay-grid,
-  .contest-review-row {
+  .contest-review-row,
+  .contest-breakdown-summary {
     grid-template-columns: minmax(0, 1fr);
   }
 
