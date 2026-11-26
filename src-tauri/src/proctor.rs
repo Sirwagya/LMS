@@ -121,11 +121,56 @@ fn is_allowed_process(app: &RunningApp, self_pid: u32) -> bool {
         .any(|prefix| matches_bundle_prefix(&bundle_lower, prefix))
 }
 
+fn is_extra_allowed(app: &RunningApp, extra_allowlist: &[String]) -> bool {
+    if extra_allowlist.is_empty() {
+        return false;
+    }
+    let name_lower = app.name.trim().to_ascii_lowercase();
+    let bundle_lower = app.bundle_id.trim().to_ascii_lowercase();
+    extra_allowlist.iter().any(|raw| {
+        let entry = raw.trim().to_ascii_lowercase();
+        !entry.is_empty()
+            && (name_lower == entry
+                || (!bundle_lower.is_empty() && matches_bundle_prefix(&bundle_lower, &entry)))
+    })
+}
+
+/// Filter out Vedam LMS itself, essential macOS system/shell UI processes, and any explicit dev allowlist entries.
+pub fn filter_disallowed_apps_with_allowlist(
+    apps: Vec<RunningApp>,
+    self_pid: u32,
+    extra_allowlist: &[String],
+) -> Vec<RunningApp> {
+    apps.into_iter()
+        .filter(|app| {
+            !is_allowed_process(app, self_pid) && !is_extra_allowed(app, extra_allowlist)
+        })
+        .collect()
+}
+
 /// Filter out Vedam LMS itself and essential macOS system/shell UI processes.
 pub fn filter_disallowed_apps(apps: Vec<RunningApp>, self_pid: u32) -> Vec<RunningApp> {
-    apps.into_iter()
-        .filter(|app| !is_allowed_process(app, self_pid))
-        .collect()
+    filter_disallowed_apps_with_allowlist(apps, self_pid, &[])
+}
+
+#[cfg(target_os = "macos")]
+fn configured_dev_allowlist() -> Vec<String> {
+    let mut entries = Vec::new();
+    if cfg!(debug_assertions) {
+        entries.push("com.google.antigravity-ide".to_string());
+    }
+    if matches!(std::env::var("APP_ENV").as_deref(), Ok("production")) {
+        return entries;
+    }
+    if let Ok(raw) = std::env::var("LMS_PROCTOR_DEV_ALLOW_APPS") {
+        for item in raw.split(',') {
+            let trimmed = item.trim();
+            if !trimmed.is_empty() {
+                entries.push(trimmed.to_string());
+            }
+        }
+    }
+    entries
 }
 
 /// Parse tab-delimited `name\tbundle_id\tpid` lines emitted by System Events AppleScript.
@@ -212,7 +257,12 @@ end tell"#;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let parsed = parse_process_lines(&stdout);
-    Ok(filter_disallowed_apps(parsed, std::process::id()))
+    let allowlist = configured_dev_allowlist();
+    Ok(filter_disallowed_apps_with_allowlist(
+        parsed,
+        std::process::id(),
+        &allowlist,
+    ))
 }
 
 #[cfg(target_os = "macos")]
@@ -569,6 +619,48 @@ mod tests {
         assert_eq!(
             escape_applescript_string("App \"One\"\\Two\nThree"),
             "App \\\"One\\\"\\\\Two Three"
+        );
+    }
+
+    #[test]
+    fn dev_allowlist_bypasses_antigravity_bundle_without_allowing_other_electron_apps() {
+        let apps = vec![
+            RunningApp {
+                name: "Electron".into(),
+                bundle_id: "com.google.antigravity-ide".into(),
+                pid: 500,
+            },
+            RunningApp {
+                name: "Electron".into(),
+                bundle_id: "com.tinyspeck.slackmacgap".into(),
+                pid: 501,
+            },
+            RunningApp {
+                name: "Safari".into(),
+                bundle_id: "com.apple.Safari".into(),
+                pid: 502,
+            },
+        ];
+
+        let remaining = filter_disallowed_apps_with_allowlist(
+            apps,
+            4242,
+            &["com.google.antigravity-ide".to_string()],
+        );
+        assert_eq!(
+            remaining,
+            vec![
+                RunningApp {
+                    name: "Electron".into(),
+                    bundle_id: "com.tinyspeck.slackmacgap".into(),
+                    pid: 501,
+                },
+                RunningApp {
+                    name: "Safari".into(),
+                    bundle_id: "com.apple.Safari".into(),
+                    pid: 502,
+                },
+            ]
         );
     }
 }
