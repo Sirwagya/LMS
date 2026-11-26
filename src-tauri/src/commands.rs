@@ -791,7 +791,7 @@ impl DesktopCore {
         {
             Ok(val) => {
                 if method != "GET"
-                    && !is_contest_attempt_path(path)
+                    && !is_contest_native_path(path)
                     && session.role == "student"
                     && let Ok(account) = self.ensure_student_session(&session).await
                     && let Ok(status) = account.engine.synchronize(&session.token).await
@@ -819,7 +819,7 @@ impl DesktopCore {
             .map_err(|_| ProxyFailure::ApiError("Unsupported HTTP method.".into()))?;
         let url = format!("{}/api/v1{}", self.api_base_url, path);
         let mut req = self.http.request(parsed_method, url);
-        if cfg!(target_os = "macos") && is_contest_attempt_path(path) {
+        if cfg!(target_os = "macos") && is_contest_native_path(path) {
             req = req
                 .header("X-LMS-Contest-Client", "macos")
                 .timeout(Duration::from_secs(8));
@@ -1242,10 +1242,13 @@ fn parse_content_disposition_filename(header: &str) -> Option<String> {
     None
 }
 
-fn is_contest_attempt_path(path: &str) -> bool {
+fn is_contest_native_path(path: &str) -> bool {
     path.strip_prefix("/contests/")
-        .and_then(|suffix| suffix.strip_suffix("/attempt"))
-        .is_some_and(|id| !id.is_empty() && !id.contains('/'))
+        .and_then(|rest| {
+            rest.strip_suffix("/attempt")
+                .or_else(|| rest.strip_suffix("/events"))
+        })
+        .is_some_and(|id| !id.is_empty() && !id.contains('/') && !id.contains('?'))
 }
 
 #[tauri::command]
@@ -1658,6 +1661,83 @@ mod tests {
             .await;
         server.await.unwrap();
         assert_eq!(attempt.unwrap()["state"], "ready");
+    }
+
+    #[test]
+    fn contest_native_path_matches_only_attempt_and_events() {
+        assert!(is_contest_native_path("/contests/sample/attempt"));
+        assert!(is_contest_native_path("/contests/sample/events"));
+
+        for excluded in [
+            "/contests/sample/report",
+            "/contests/sample/leaderboard",
+            "/contests/sample/alias",
+            "/contests/results",
+            "/contests//events",
+            "/contests/a/b/events",
+            "/contests//attempt",
+            "/contests/a/b/attempt",
+            "/contests/sample/events?x=1",
+        ] {
+            assert!(
+                !is_contest_native_path(excluded),
+                "unexpected match for {excluded}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn contest_events_use_native_transport_and_exclude_report() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (method, path, body, headers) = read_http_request(&mut stream).await.unwrap();
+            assert_eq!(method, "POST");
+            assert_eq!(path, "/api/v1/contests/sample/events");
+            let headers = headers.to_ascii_lowercase();
+            assert!(headers.contains("\r\nx-lms-contest-client: macos\r\n"));
+            assert!(headers.contains("\r\nauthorization: bearer native-test-token\r\n"));
+            assert!(!headers.contains("\r\norigin:"));
+            assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["batchId"], "b1");
+            write_json_response(&mut stream, "200 OK", &json!({ "accepted": 3 })).await;
+
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let (method, path, _body, headers) = read_http_request(&mut stream).await.unwrap();
+            assert_eq!(method, "GET");
+            assert_eq!(path, "/api/v1/contests/sample/report");
+            let headers = headers.to_ascii_lowercase();
+            assert!(!headers.contains("\r\nx-lms-contest-client:"));
+            assert!(headers.contains("\r\nauthorization: bearer native-test-token\r\n"));
+            assert!(!headers.contains("\r\norigin:"));
+            write_json_response(&mut stream, "200 OK", &json!({ "status": "published" })).await;
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Arc::new(MemorySessionVault::default());
+        vault
+            .save(&StoredSession {
+                user_id: "student".into(),
+                role: "student".into(),
+                token: "native-test-token".into(),
+            })
+            .unwrap();
+        let core = DesktopCore::new(dir.path(), &url, vault, Arc::new(NoopEventSink)).unwrap();
+        let events_res = core
+            .request(
+                "/contests/sample/events",
+                Some("POST"),
+                Some(json!({ "batchId": "b1", "events": [] })),
+            )
+            .await
+            .unwrap();
+        assert_eq!(events_res["accepted"], 3);
+
+        let report_res = core
+            .request("/contests/sample/report", Some("GET"), None)
+            .await
+            .unwrap();
+        assert_eq!(report_res["status"], "published");
+        server.await.unwrap();
     }
 
     #[tokio::test]
