@@ -8,6 +8,7 @@ var (
 	ErrUnauthorized    = errors.New("authentication required")
 	ErrForbidden       = errors.New("insufficient permissions")
 	ErrValidation      = errors.New("validation failed")
+	ErrUnavailable     = errors.New("service unavailable")
 	ErrRateLimited     = errors.New("rate limit exceeded")
 	ErrAlreadyGraded   = errors.New("graded submission is immutable")
 	ErrAlreadyPaid     = errors.New("invoice already paid")

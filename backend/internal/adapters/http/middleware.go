@@ -208,6 +208,14 @@ func (a *api) rate(path string, next http.Handler) http.Handler {
 		case "/submissions":
 			bucket, message, maximum = "submissions", "Too many submissions. Try again in a minute.", 10
 			subject = actor(r).UserID
+		case "/contests/{id}/attempt":
+			bucket, subject, message, maximum = "contest-attempt", actor(r).UserID, "Too many contest requests. Try again in a minute.", 120
+		case "/contests/{id}/events":
+			bucket, subject, message, maximum = "contest-events", actor(r).UserID, "Too many event batches. Try again in a minute.", 180
+		case "/contests/{id}/appeal":
+			bucket, subject, message, maximum = "contest-appeal", actor(r).UserID, "Too many appeal submissions. Try again in a minute.", 20
+		case "/contests/{id}/alias":
+			bucket, subject, message, maximum = "contest-alias", actor(r).UserID, "Too many alias updates. Try again in a minute.", 30
 		case "/password":
 			bucket, message, maximum = "password", "Too many password change attempts.", 5
 			subject = actor(r).UserID

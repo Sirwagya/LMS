@@ -44,8 +44,12 @@ func (a *api) createSession(ctx context.Context, u *iam.User) (string, error) {
 }
 
 func nativeAuth(r *http.Request) bool {
-	return strings.HasPrefix(r.URL.Path, "/api/v1/") && r.Header.Get("X-LMS-Auth") == "bearer" &&
-		r.Header.Get("Origin") == "" && r.Header.Get("Cookie") == "" && r.Header.Get("Sec-Fetch-Site") == "" && r.Header.Get("Sec-Fetch-Mode") == ""
+	return strings.HasPrefix(r.URL.Path, "/api/v1/") && r.Header.Get("X-LMS-Auth") == "bearer" && nativeRequest(r)
+}
+
+func nativeRequest(r *http.Request) bool {
+	return r.Header.Get("Origin") == "" && r.Header.Get("Cookie") == "" &&
+		r.Header.Get("Sec-Fetch-Site") == "" && r.Header.Get("Sec-Fetch-Mode") == ""
 }
 
 func (a *api) passwordSlot(w http.ResponseWriter) (func(), error) {

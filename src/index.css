@@ -2428,6 +2428,16 @@ select.account-input {
   padding: 10px 12px;
   font: inherit;
 }
+.portal-form .contest-roster-choice {
+  flex-direction: row;
+  align-items: center;
+  min-height: 32px;
+}
+.portal-form .contest-roster-choice input {
+  width: 16px;
+  min-height: 16px;
+  padding: 0;
+}
 .portal-form select {
   appearance: auto;
 }

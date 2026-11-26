@@ -1,5 +1,6 @@
 mod commands;
 pub mod keychain;
+mod proctor;
 
 use std::sync::Arc;
 
@@ -13,6 +14,10 @@ use crate::commands::{
     lms_save_code_draft, lms_sync_now, lms_sync_status,
 };
 use crate::keychain::{MacOSKeychainVault, SessionVault};
+use crate::proctor::{
+    lms_proctor_capture_screen, lms_proctor_get_fullscreen, lms_proctor_list_apps,
+    lms_proctor_lockdown, lms_proctor_quit_other_apps, lms_proctor_set_fullscreen,
+};
 
 fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let settings = MenuItemBuilder::with_id("open_settings", "Account & Settings…")
@@ -151,6 +156,12 @@ pub fn run() {
             lms_save_code_draft,
             lms_load_code_draft,
             lms_export_asset,
+            lms_proctor_list_apps,
+            lms_proctor_lockdown,
+            lms_proctor_quit_other_apps,
+            lms_proctor_set_fullscreen,
+            lms_proctor_get_fullscreen,
+            lms_proctor_capture_screen,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Vedam LMS desktop shell");

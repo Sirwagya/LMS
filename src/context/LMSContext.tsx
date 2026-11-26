@@ -150,14 +150,16 @@ export function LMSProvider({ children }: { children: ReactNode }) {
           ? "Coding challenge"
           : route.startsWith("/subjects/")
             ? subjectByCode(currentSubjectCode)?.name || "Course not found"
-            : {
-                "/dashboard": "Dashboard",
-                "/overview": "Attendance & results",
-                "/assignments": "Assignments & progress",
-                "/schedule": "Timetable",
-                "/fees": "Fees & receipts",
-                "/account": "Account",
-              }[route] || "Page not found";
+            : route.startsWith("/contests/")
+              ? "Contest"
+              : {
+                  "/dashboard": "Dashboard",
+                  "/overview": "Attendance & results",
+                  "/assignments": "Assignments & progress",
+                  "/schedule": "Timetable",
+                  "/fees": "Fees & receipts",
+                  "/account": "Account",
+                }[route] || "Page not found";
     document.title = `${page} · Vedam`;
   }, [route, currentSubjectCode, subjectByCode, learning]);
 

@@ -14,6 +14,7 @@ import (
 
 	redisadapter "vedam/lms/internal/adapters/redis"
 	"vedam/lms/internal/adapters/storage"
+	contestapp "vedam/lms/internal/application/contest"
 	"vedam/lms/internal/application/finance"
 	learningapp "vedam/lms/internal/application/learning"
 	"vedam/lms/internal/application/staff"
@@ -21,6 +22,7 @@ import (
 	"vedam/lms/internal/domain/academic"
 	"vedam/lms/internal/domain/assessment"
 	"vedam/lms/internal/domain/catalog"
+	"vedam/lms/internal/domain/contest"
 	"vedam/lms/internal/domain/envelope"
 	"vedam/lms/internal/domain/errs"
 	financedomain "vedam/lms/internal/domain/finance"
@@ -96,18 +98,23 @@ type Dependencies struct {
 	Discussions interface {
 		GetByID(context.Context, string) (learning.Discussion, error)
 	}
-	Progress  Progress
-	Invoices  Invoices
-	Academic  Academic
-	Sync      Sync
-	AssetMeta catalog.AssetMetadataRepository
-	Assets    *storage.LocalAssets
-	Bootstrap *workspace.BootstrapService
-	Learning  *learningapp.Service
-	Staff     *staff.Service
-	Payments  *finance.PayInvoiceService
-	Coding    CodingService
-	Queue     *redisadapter.Queue
+	Progress         Progress
+	Invoices         Invoices
+	Academic         Academic
+	Sync             Sync
+	AssetMeta        catalog.AssetMetadataRepository
+	Assets           *storage.LocalAssets
+	Bootstrap        *workspace.BootstrapService
+	Learning         *learningapp.Service
+	Staff            *staff.Service
+	Payments         *finance.PayInvoiceService
+	Coding           CodingService
+	Queue            *redisadapter.Queue
+	Contests         *contestapp.Service
+	ContestRepo      contest.Repository
+	ContestAttempts  contest.AttemptRepository
+	ContestIntegrity contest.IntegrityRepository
+	ContestResults   contest.ResultsRepository
 }
 
 type api struct {
@@ -187,6 +194,57 @@ func New(d Dependencies) http.Handler {
 	} {
 		a.mount(mux, "/api/v1", rt)
 	}
+	for _, prefix := range []string{"/api", "/api/v1"} {
+		a.mount(mux, prefix, route{"GET", "/contests/status", authenticated, a.contestStatus})
+		if d.Contests != nil {
+			for _, rt := range []route{
+				{"GET", "/contests", student, a.contestList},
+				{"GET", "/staff/contests", staffOnly, a.contestList},
+				{"POST", "/staff/contests", staffOnly, a.contestSave},
+				{"GET", "/staff/contests/{id}", staffOnly, a.contestDetail},
+				{"PUT", "/staff/contests/{id}", staffOnly, a.contestSave},
+				{"POST", "/staff/contests/{id}/publish", staffOnly, a.contestPublish},
+				{"POST", "/staff/contests/{id}/cancel", staffOnly, a.contestCancel},
+			} {
+				a.mount(mux, prefix, rt)
+			}
+		}
+		if d.ContestIntegrity != nil {
+			for _, rt := range []route{
+				{"GET", "/contests/{id}/appeal", student, a.contestListAppeals},
+				{"POST", "/contests/{id}/appeal", student, a.contestSubmitAppeal},
+				{"GET", "/staff/contests/{id}/integrity", staffOnly, a.contestReviewQueue},
+				{"GET", "/staff/contests/{id}/attempts/{attemptId}/replay", staffOnly, a.contestAttemptReplay},
+				{"GET", "/staff/contests/{id}/attempts/{attemptId}/media", staffOnly, a.contestListProctorMedia},
+				{"GET", "/staff/contests/{id}/media/{mediaId}", staffOnly, a.contestGetProctorMedia},
+				{"POST", "/staff/contests/{id}/reviewers", staffOnly, a.contestAssignReviewer},
+				{"POST", "/staff/contests/{id}/attempts/{attemptId}/review", staffOnly, a.contestDecideReview},
+				{"POST", "/staff/contests/{id}/appeals/{appealId}/resolve", staffOnly, a.contestResolveAppeal},
+				{"POST", "/staff/contests/{id}/similarity", staffOnly, a.contestComputeSimilarity},
+			} {
+				a.mount(mux, prefix, rt)
+			}
+		}
+		if d.ContestResults != nil {
+			for _, rt := range []route{
+				{"GET", "/contests/results", student, a.contestStudentResultsSummary},
+				{"PUT", "/contests/{id}/alias", student, a.contestSetAlias},
+				{"GET", "/contests/{id}/report", student, a.contestStudentReport},
+				{"GET", "/contests/{id}/leaderboard", authenticated, a.contestLeaderboard},
+				{"GET", "/staff/contests/{id}/results", staffOnly, a.contestStaffResults},
+				{"POST", "/staff/contests/{id}/results/publish", staffOnly, a.contestPublishResults},
+			} {
+				a.mount(mux, prefix, rt)
+			}
+		}
+	}
+	if d.ContestAttempts != nil {
+		a.mount(mux, "/api/v1", route{"POST", "/contests/{id}/attempt", student, a.contestAttempt})
+		if d.ContestIntegrity != nil {
+			a.mount(mux, "/api/v1", route{"POST", "/contests/{id}/events", student, a.contestIngestEvents})
+			a.mount(mux, "/api/v1", route{"POST", "/contests/{id}/media", student, a.contestUploadProctorMedia})
+		}
+	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { a.failure(w, r, problem(404, "Endpoint not found.")) })
 	if d.Web != nil {
 		mux.Handle("/", d.Web)
@@ -242,6 +300,10 @@ func (a *api) failure(w http.ResponseWriter, r *http.Request, err error) {
 		status, message = 401, "Please sign in."
 	case errors.Is(err, errs.ErrForbidden):
 		status, message = 403, err.Error()
+	case errors.Is(err, errs.ErrUnavailable):
+		status, message = 503, err.Error()
+	case errors.Is(err, errs.ErrRateLimited):
+		status, message = 429, err.Error()
 	case errors.Is(err, errs.ErrNotFound):
 		status, message = 404, err.Error()
 	case errors.Is(err, errs.ErrConflict), errors.Is(err, errs.ErrAlreadyPaid), errors.Is(err, errs.ErrAlreadyGraded), errors.Is(err, errs.ErrScheduleOverlap):

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSCameraUsageDescription</key>
+	<string>Vedam LMS uses your camera during proctored coding contests to verify participant presence and prevent unauthorized assistance.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Vedam LMS uses your microphone during proctored coding contests to monitor ambient audio for contest integrity.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Vedam LMS captures periodic screen snapshots during proctored coding contests to verify that only authorized contest windows are in use.</string>
+</dict>
+</plist>

@@ -21,24 +21,27 @@ import (
 	"vedam/lms/internal/adapters/postgres"
 	redisadapter "vedam/lms/internal/adapters/redis"
 	"vedam/lms/internal/adapters/storage"
+	contestapp "vedam/lms/internal/application/contest"
 	"vedam/lms/internal/application/finance"
 	"vedam/lms/internal/application/learning"
 	"vedam/lms/internal/application/staff"
 	"vedam/lms/internal/application/workspace"
 	"vedam/lms/internal/domain/catalog"
+	"vedam/lms/internal/domain/contest"
 	"vedam/lms/migrations"
 )
 
 type Runtime struct {
-	Config Config
-	Log    *slog.Logger
-	DB     *pgxpool.Pool
-	Redis  *redis.Client
-	Tx     *postgres.TxManager
-	Sync   *postgres.SyncRepo
-	Cache  *redisadapter.Cache
-	Queue  *redisadapter.Queue
-	Coding *coding
+	Config       Config
+	Log          *slog.Logger
+	DB           *pgxpool.Pool
+	Redis        *redis.Client
+	Tx           *postgres.TxManager
+	Sync         *postgres.SyncRepo
+	Cache        *redisadapter.Cache
+	Queue        *redisadapter.Queue
+	Coding       *coding
+	contestJudge grader.ContestJudge
 }
 
 func Open(ctx context.Context, config Config, log *slog.Logger) (*Runtime, error) {
@@ -58,7 +61,11 @@ func Open(ctx context.Context, config Config, log *slog.Logger) (*Runtime, error
 	tx := postgres.NewTxManager(db)
 	changes := postgres.NewSyncRepo(tx)
 	cache := redisadapter.NewCache(client)
-	return &Runtime{Config: config, Log: log, DB: db, Redis: client, Tx: tx, Sync: changes, Cache: cache,
+	var official grader.ContestJudge
+	if config.ContestJudgeURL != "" {
+		official = grader.NewRemoteContestJudge(config.ContestJudgeURL, config.ContestJudgeToken)
+	}
+	return &Runtime{contestJudge: official, Config: config, Log: log, DB: db, Redis: client, Tx: tx, Sync: changes, Cache: cache,
 		Queue: redisadapter.NewQueue(client),
 		Coding: &coding{tx: tx, changes: changes, cache: cache, client: client, bridge: grader.Binary{Path: config.Grader},
 			assignments: postgres.NewAssignmentRepo(tx), attempts: postgres.NewCodingAttemptRepo(tx), submissions: postgres.NewSubmissionRepo(tx), slots: make(chan struct{}, 2)},
@@ -110,7 +117,28 @@ func (rt *Runtime) Handler() (http.Handler, func(), error) {
 		err = json.Unmarshal(raw, &snapshot)
 		return snapshot, err
 	}
+	contestRepo := postgres.NewContestAuthoringRepo(tx)
+	contestRepo.EnableScoring = rt.Config.ContestGrading && rt.contestJudge != nil
+	var attempts contest.AttemptRepository
+	if rt.Config.ContestAttempts && rt.Config.ContestAuthoring {
+		repo := postgres.NewContestAttemptRepo(rt.Tx)
+		repo.JudgeAvailable = rt.contestJudge != nil
+		attempts = repo
+	}
+	var contests *contestapp.Service
+	if rt.Config.ContestAuthoring {
+		contests = contestapp.New(contestRepo, tx, now, id)
+	}
+	var integrity contest.IntegrityRepository
+	if rt.Config.ContestIntegrity && rt.Config.ContestAttempts && rt.Config.ContestAuthoring {
+		integrity = postgres.NewContestIntegrityRepo(rt.Tx)
+	}
+	var results contest.ResultsRepository
+	if rt.Config.ContestResults && rt.Config.ContestAttempts && rt.Config.ContestAuthoring {
+		results = postgres.NewContestResultsRepo(rt.Tx)
+	}
 	return httpadapter.New(httpadapter.Dependencies{
+		ContestRepo: contestRepo, Contests: contests, ContestAttempts: attempts, ContestIntegrity: integrity, ContestResults: results,
 		Log: rt.Log, PingDB: rt.DB.Ping, Redis: rt.Redis, Sessions: redisadapter.NewSessions(rt.Redis, rt.Config.SessionTTL),
 		Cache: rt.Cache, CookieSecure: rt.Config.CookieSecure, PublicOrigin: rt.Config.PublicOrigin, TrustedProxies: rt.Config.TrustedProxies, Production: rt.Config.Production, SessionSliding: rt.Config.SessionSliding, SessionTTL: rt.Config.SessionTTL, Web: webFiles(rt.Config.Web),
 		Tx: tx, Users: users, Hasher: hasher, Catalog: cat, Notices: notices, Assignments: assignments, Submissions: subs,

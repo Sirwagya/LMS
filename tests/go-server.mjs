@@ -16,7 +16,35 @@ async function stop(proc) {
   await exited;
 }
 
-export async function isolatedGoServer() {
+function startAndWait(binPath, env, label, pattern, parseMatch) {
+  const proc = spawn(binPath, [], { env, stdio: ["ignore", "ignore", "pipe"] });
+  const ready = new Promise((resolveReady, rejectReady) => {
+    let logs = "";
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      proc.stderr.off("data", onData);
+      fn(value);
+    };
+    const timer = setTimeout(
+      () => finish(rejectReady, new Error(`${label} startup timed out\n${logs}`)),
+      10000,
+    );
+    const onData = (data) => {
+      logs += data;
+      const match = logs.match(pattern);
+      if (match) finish(resolveReady, parseMatch(match));
+    };
+    proc.once("error", (error) => finish(rejectReady, error));
+    proc.once("exit", (code) => finish(rejectReady, new Error(`${label} exited ${code}\n${logs}`)));
+    proc.stderr.on("data", onData);
+  });
+  return { proc, ready };
+}
+
+export async function isolatedGoServer(options = {}) {
   const source = process.env.TEST_DATABASE_URL || defaultDB;
   const schema = "lms_http_" + randomBytes(10).toString("hex");
   const db = new URL(source);
@@ -25,6 +53,7 @@ export async function isolatedGoServer() {
   const socket = join(dir, "redis.sock");
   const env = {
     ...process.env,
+    ...(options.env || {}),
     HTTP_ADDR: "127.0.0.1:0",
     DATABASE_URL: db.href,
     REDIS_URL: "unix://" + socket,
@@ -32,10 +61,10 @@ export async function isolatedGoServer() {
     GRADER_BINARY_PATH: resolve("target/release/lms-grader"),
     COOKIE_SECURE: "false",
   };
-  let child, redis, schemaCreated = false;
+  let child, worker, redis, schemaCreated = false;
   async function close() {
     try {
-      await stop(child);
+      await Promise.all([stop(worker), stop(child)]);
       await stop(redis);
       if (schemaCreated)
         await exec("psql", [source, "-Xq", "-v", "ON_ERROR_STOP=1", "-c", `DROP SCHEMA ${schema} CASCADE`]);
@@ -60,30 +89,36 @@ export async function isolatedGoServer() {
       }
     }
     await exec("cargo", ["build", "--release", "-p", "lms-grader"]);
-    await exec("go", ["build", "-o", dir + "/", "./cmd/api", "./cmd/seed"], { cwd: "backend", env });
+    const targets = ["./cmd/api", "./cmd/seed", ...(options.worker ? ["./cmd/worker"] : [])];
+    await exec("go", ["build", "-o", dir + "/", ...targets], { cwd: "backend", env });
     await exec(join(dir, "seed"), [], { env });
     return {
       async start() {
-        child = spawn(join(dir, "api"), [], { env, stdio: ["ignore", "ignore", "pipe"] });
-        return new Promise((resolve, reject) => {
-          let logs = "";
-          const timer = setTimeout(() => reject(new Error("Go API startup timed out\n" + logs)), 10000);
-          child.once("error", (error) => { clearTimeout(timer); reject(error); });
-          child.once("exit", (code) => {
-            clearTimeout(timer);
-            reject(new Error(`Go API exited ${code}\n${logs}`));
-          });
-          child.stderr.on("data", (data) => {
-            logs += data;
-            const addr = logs.match(/"msg":"api listening","addr":"([^"]+)"/)?.[1];
-            if (addr) {
-              clearTimeout(timer);
-              resolve("http://" + addr);
-            }
-          });
-        });
+        const apiStart = startAndWait(
+          join(dir, "api"),
+          env,
+          "Go API",
+          /"msg":"api listening","addr":"([^"]+)"/,
+          (match) => "http://" + match[1],
+        );
+        child = apiStart.proc;
+        if (options.worker) {
+          const workerStart = startAndWait(
+            join(dir, "worker"),
+            env,
+            "Go worker",
+            /"msg":"worker running"/,
+            () => undefined,
+          );
+          worker = workerStart.proc;
+          const [baseUrl] = await Promise.all([apiStart.ready, workerStart.ready]);
+          return baseUrl;
+        }
+        return apiStart.ready;
       },
-      stop: () => stop(child),
+      async stop() {
+        await Promise.all([stop(worker), stop(child)]);
+      },
       close,
     };
   } catch (cause) {

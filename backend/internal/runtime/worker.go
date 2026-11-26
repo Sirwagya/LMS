@@ -38,7 +38,69 @@ func (rt *Runtime) Work(ctx context.Context) {
 		wg.Go(func() { rt.consumeGrading(ctx, uuid.NewString()) })
 	}
 	wg.Go(func() { rt.reapSubmissionAssets(ctx) })
+	if rt.Config.ContestAttempts {
+		wg.Go(func() { rt.expireContestAttempts(ctx) })
+		wg.Go(func() { rt.scoreContests(ctx) })
+		if rt.contestJudge != nil {
+			for range 2 {
+				wg.Go(func() { rt.judgeContests(ctx) })
+			}
+		}
+		if rt.Config.ContestIntegrity {
+			wg.Go(func() { rt.purgeContestEvidence(ctx) })
+		}
+	}
 	wg.Wait()
+}
+
+func (rt *Runtime) expireContestAttempts(ctx context.Context) {
+	const batch = 50
+	repo := postgres.NewContestAttemptRepo(rt.Tx)
+	for ctx.Err() == nil {
+		sweep, cancel := context.WithTimeout(ctx, 5*time.Second)
+		count, err := repo.Expire(sweep, batch)
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			rt.Log.Warn("contest attempt expiration failed", "err", err)
+		}
+		if err != nil || count < batch {
+			pause(ctx, 2*time.Second)
+		}
+	}
+}
+
+func (rt *Runtime) purgeContestEvidence(ctx context.Context) {
+	repo := postgres.NewContestIntegrityRepo(rt.Tx)
+	for ctx.Err() == nil {
+		assets, err := storage.NewLocalAssets(rt.Config.Assets)
+		if err != nil {
+			if ctx.Err() == nil {
+				rt.Log.Warn("contest proctor media cleanup unavailable", "err", err)
+			}
+		} else {
+			sweepMedia, cancelMedia := context.WithTimeout(ctx, 5*time.Second)
+			_, mediaErr := repo.PurgeExpiredProctorMedia(sweepMedia, func(key string) error {
+				err := assets.Remove(key)
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return err
+			})
+			cancelMedia()
+			_ = assets.Close()
+			if mediaErr != nil && ctx.Err() == nil {
+				rt.Log.Warn("contest proctor media retention sweep failed", "err", mediaErr)
+			}
+		}
+
+		sweep, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, err = repo.PurgeExpiredEvidence(sweep)
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			rt.Log.Warn("contest evidence retention sweep failed", "err", err)
+		}
+		pause(ctx, 15*time.Minute)
+	}
 }
 
 func pause(ctx context.Context, d time.Duration) {
