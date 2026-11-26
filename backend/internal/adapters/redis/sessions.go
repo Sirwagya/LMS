@@ -107,3 +107,14 @@ return redis.call('DEL', KEYS[1])
 func (s *Sessions) RevokeAll(ctx context.Context, userID string) error {
 	return revokeSessions.Run(ctx, s.client, []string{"user_sess:" + userID}).Err()
 }
+
+// Revoke removes only the supplied session, preserving the user's other devices.
+func (s *Sessions) Revoke(ctx context.Context, userID, token string) error {
+	id := digest(token)
+	_, err := s.client.TxPipelined(ctx, func(p redis.Pipeliner) error {
+		p.Del(ctx, "sess:"+id)
+		p.SRem(ctx, "user_sess:"+userID, id)
+		return nil
+	})
+	return err
+}

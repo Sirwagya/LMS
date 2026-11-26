@@ -24,7 +24,10 @@ var ErrEvaluationBusy = errors.New("Wait for your current execution to finish.")
 var ErrRunnerBusy = errors.New("The local runner is busy. Please try again shortly.")
 
 func (a *api) evaluate(w http.ResponseWriter, r *http.Request) error {
-	f := read(w, r)
+	if a.Production {
+		return problem(503, "Local grading is disabled in production.")
+	}
+	f := readBody(w, r, 256<<10)
 	if f.err != nil {
 		return f.err
 	}

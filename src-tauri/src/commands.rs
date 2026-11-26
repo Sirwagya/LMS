@@ -116,13 +116,19 @@ struct AccountSession {
     tasks: std::sync::Mutex<Vec<JoinHandle<()>>>,
 }
 
-impl Drop for AccountSession {
-    fn drop(&mut self) {
+impl AccountSession {
+    fn stop(&self) {
         if let Ok(mut guard) = self.tasks.lock() {
             for handle in guard.drain(..) {
                 handle.abort();
             }
         }
+    }
+}
+
+impl Drop for AccountSession {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -153,6 +159,7 @@ pub struct DesktopCore {
     grader: Arc<JudgePipeline>,
     events: Arc<dyn EventSink>,
     active: Mutex<Option<Arc<AccountSession>>>,
+    session_change: Mutex<()>,
 }
 
 impl DesktopCore {
@@ -162,7 +169,11 @@ impl DesktopCore {
         vault: Arc<dyn SessionVault>,
         events: Arc<dyn EventSink>,
     ) -> Result<Self, String> {
-        let api_base_url = api_base_url.into().trim_end_matches('/').to_string();
+        let api_base_url = HttpRemote::validate_api_origin(&api_base_url.into())
+            .map_err(|err| err.to_string())?
+            .as_str()
+            .trim_end_matches('/')
+            .to_string();
         let data_dir = data_dir.into();
         std::fs::create_dir_all(&data_dir).map_err(|e| format!("create desktop data dir: {e}"))?;
         let http = Client::builder()
@@ -186,6 +197,7 @@ impl DesktopCore {
             grader: Arc::new(JudgePipeline::default()),
             events,
             active: Mutex::new(None),
+            session_change: Mutex::new(()),
         })
     }
 
@@ -254,7 +266,7 @@ impl DesktopCore {
         let dto = match account.engine.synchronize(&session.token).await {
             Ok(snapshot) => SyncStatusDto::from(snapshot),
             Err(SyncError::Unauthorized) => {
-                self.invalidate_session().await;
+                let _ = self.invalidate_session(&session).await;
                 return Err("Please sign in.".to_string());
             }
             Err(err) => {
@@ -301,7 +313,10 @@ impl DesktopCore {
         Ok(SyncStatusDto::from(watch_state))
     }
 
-    pub async fn run_code_local(&self, request: GradeRequest) -> Result<GradeResult, String> {
+    async fn run_code_local(&self, request: GradeRequest) -> Result<GradeResult, String> {
+        if self.require_session()?.role != "student" {
+            return Err("Student access required.".into());
+        }
         self.grader
             .evaluate(request)
             .await
@@ -385,7 +400,7 @@ impl DesktopCore {
             .map_err(|e| format!("Download failed: {e}"))?;
 
         if resp.status() == StatusCode::UNAUTHORIZED {
-            self.invalidate_session().await;
+            let _ = self.invalidate_session(&session).await;
             return Err("Please sign in.".to_string());
         }
         if !resp.status().is_success() {
@@ -403,7 +418,7 @@ impl DesktopCore {
             .get(reqwest::header::CONTENT_DISPOSITION)
             .and_then(|v| v.to_str().ok())
             .and_then(parse_content_disposition_filename)
-            .unwrap_or(default_name);
+            .unwrap_or_else(|| sanitize_filename(&default_name));
 
         let bytes = resp
             .bytes()
@@ -412,11 +427,15 @@ impl DesktopCore {
             .to_vec();
 
         if let Some(acc) = &account {
-            let assets_dir = self.data_dir.join("assets").join(&session.user_id);
+            let assets_dir = self
+                .data_dir
+                .join("assets")
+                .join(sanitize_filename(&session.user_id));
             tokio::fs::create_dir_all(&assets_dir)
                 .await
                 .map_err(|e| e.to_string())?;
-            let cached_path = assets_dir.join(format!("{cache_key}_{}", sanitize_filename(&resolved_name)));
+            let cached_path =
+                assets_dir.join(format!("{cache_key}_{}", sanitize_filename(&resolved_name)));
             tokio::fs::write(&cached_path, &bytes)
                 .await
                 .map_err(|e| e.to_string())?;
@@ -433,7 +452,9 @@ impl DesktopCore {
     }
 
     async fn handle_auth(&self, route: &str, body: Option<Value>) -> Result<Value, String> {
+        let _change = self.session_change.lock().await;
         let payload = body.ok_or_else(|| "Credentials required.".to_string())?;
+        let previous = self.vault.load();
         let mut response = self
             .proxy_raw("POST", route, None, Some(payload))
             .await
@@ -460,7 +481,20 @@ impl DesktopCore {
             role: role.clone(),
             token: token.clone(),
         };
-        self.vault.save(&session)?;
+        if let Some(previous) = previous.as_ref()
+            && previous.token != session.token
+            && let Err(err) = self.revoke_bearer(&previous.token).await
+        {
+            let _ = self.revoke_bearer(&session.token).await;
+            return Err(format!("Could not end the previous session. {err}"));
+        }
+        if let Err(err) = self.replace_session(&session).await {
+            let _ = self.revoke_bearer(&session.token).await;
+            if let Some(previous) = previous.as_ref() {
+                let _ = self.invalidate_session(previous).await;
+            }
+            return Err(err);
+        }
 
         if role == "student" {
             let account = self.ensure_student_session(&session).await?;
@@ -475,13 +509,34 @@ impl DesktopCore {
         Ok(response)
     }
 
+    async fn revoke_bearer(&self, token: &str) -> Result<(), String> {
+        let response = self
+            .http
+            .post(format!("{}/api/v1/session/revoke", self.api_base_url))
+            .bearer_auth(token)
+            .timeout(Duration::from_secs(5))
+            .json(&json!({}))
+            .send()
+            .await
+            .map_err(|_| "Session revocation could not reach the server.".to_string())?;
+        if response.status().is_success() || response.status() == StatusCode::UNAUTHORIZED {
+            Ok(())
+        } else {
+            Err(format!(
+                "Session revocation failed (HTTP {}).",
+                response.status()
+            ))
+        }
+    }
+
     async fn handle_logout(&self) -> Result<Value, String> {
+        let _change = self.session_change.lock().await;
         if let Some(session) = self.vault.load() {
             let _ = self
                 .proxy_raw("POST", "/logout", Some(&session.token), Some(json!({})))
                 .await;
+            self.invalidate_session(&session).await?;
         }
-        self.invalidate_session().await;
         Ok(json!({ "ok": true }))
     }
 
@@ -508,7 +563,7 @@ impl DesktopCore {
                 self.events.emit_sync_updated(&status.into());
             }
             Err(SyncError::Unauthorized) => {
-                self.invalidate_session().await;
+                let _ = self.invalidate_session(&session).await;
                 return Err("Please sign in.".to_string());
             }
             Err(err) => return Err(err.to_string()),
@@ -606,10 +661,8 @@ impl DesktopCore {
                     .collect();
                 if let Ok(cached) = account.store.discussions(lecture_id) {
                     for row in cached {
-                        let is_pending = row
-                            .get("pending")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false);
+                        let is_pending =
+                            row.get("pending").and_then(Value::as_bool).unwrap_or(false);
                         let row_id = row.get("id").and_then(Value::as_str).unwrap_or("");
                         if is_pending && !existing_ids.contains(row_id) {
                             remote_rows.push(row);
@@ -620,7 +673,7 @@ impl DesktopCore {
             }
             Ok(other) => Ok(other),
             Err(ProxyFailure::Unauthorized) => {
-                self.invalidate_session().await;
+                let _ = self.invalidate_session(&session).await;
                 Err("Please sign in.".to_string())
             }
             Err(ProxyFailure::Connectivity(_)) => {
@@ -634,7 +687,11 @@ impl DesktopCore {
         }
     }
 
-    async fn handle_coding_evaluate(&self, path: &str, body: Option<Value>) -> Result<Value, String> {
+    async fn handle_coding_evaluate(
+        &self,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value, String> {
         let session = self.require_session()?;
         let payload = body.ok_or_else(|| "Evaluation payload required.".to_string())?;
         let action = payload.get("action").and_then(Value::as_str).unwrap_or("");
@@ -653,7 +710,7 @@ impl DesktopCore {
                 Ok(result)
             }
             Err(ProxyFailure::Unauthorized) => {
-                self.invalidate_session().await;
+                let _=self.invalidate_session(&session).await;
                 Err("Please sign in.".to_string())
             }
             Err(ProxyFailure::Connectivity(_)) if action == "run" && session.role == "student" => {
@@ -683,7 +740,7 @@ impl DesktopCore {
         {
             Ok(val) => Ok(val),
             Err(ProxyFailure::Unauthorized) => {
-                self.invalidate_session().await;
+                let _ = self.invalidate_session(&session).await;
                 Err("Please sign in.".to_string())
             }
             Err(ProxyFailure::Connectivity(_)) => Ok(json!([])),
@@ -691,16 +748,29 @@ impl DesktopCore {
         }
     }
 
-    async fn handle_password_change(&self, path: &str, body: Option<Value>) -> Result<Value, String> {
+    async fn handle_password_change(
+        &self,
+        path: &str,
+        body: Option<Value>,
+    ) -> Result<Value, String> {
+        let _change = self.session_change.lock().await;
         let session = self.require_session()?;
         let mut response = self
             .proxy_raw("POST", path, Some(&session.token), body)
             .await
             .map_err(String::from)?;
-        if let Some(new_token) = response.get("token").and_then(Value::as_str) {
-            let mut next = session.clone();
-            next.token = new_token.to_string();
-            self.vault.save(&next)?;
+        let Some(new_token) = response.get("token").and_then(Value::as_str) else {
+            let _ = self.invalidate_session(&session).await;
+            return Err("The server did not return the rotated session. Please sign in.".into());
+        };
+        let mut next = session.clone();
+        next.token = new_token.to_string();
+        if let Err(err) = self.replace_session(&next).await {
+            let _ = self.invalidate_session(&session).await;
+            return Err(err);
+        }
+        if next.role == "student" {
+            self.ensure_student_session(&next).await?;
         }
         if let Some(obj) = response.as_object_mut() {
             obj.remove("token");
@@ -720,7 +790,8 @@ impl DesktopCore {
             .await
         {
             Ok(val) => {
-                if method != "GET" && session.role == "student"
+                if method != "GET"
+                    && session.role == "student"
                     && let Ok(account) = self.ensure_student_session(&session).await
                     && let Ok(status) = account.engine.synchronize(&session.token).await
                 {
@@ -729,7 +800,7 @@ impl DesktopCore {
                 Ok(val)
             }
             Err(ProxyFailure::Unauthorized) => {
-                self.invalidate_session().await;
+                let _ = self.invalidate_session(&session).await;
                 Err("Please sign in.".to_string())
             }
             Err(err) => Err(err.into()),
@@ -747,6 +818,9 @@ impl DesktopCore {
             .map_err(|_| ProxyFailure::ApiError("Unsupported HTTP method.".into()))?;
         let url = format!("{}/api/v1{}", self.api_base_url, path);
         let mut req = self.http.request(parsed_method, url);
+        if method == "POST" && matches!(path, "/login" | "/register" | "/password") {
+            req = req.header("X-LMS-Auth", "bearer");
+        }
         if let Some(token) = bearer_token {
             req = req.bearer_auth(token);
         }
@@ -782,14 +856,33 @@ impl DesktopCore {
             .ok_or_else(|| "Please sign in.".to_string())
     }
 
-    async fn invalidate_session(&self) {
-        self.vault.clear();
+    async fn replace_session(&self, session: &StoredSession) -> Result<(), String> {
         let mut guard = self.active.lock().await;
-        *guard = None;
+        self.vault.save(session)?;
+        if let Some(previous) = guard.take() {
+            previous.stop();
+        }
+        Ok(())
+    }
+
+    async fn invalidate_session(&self, expected: &StoredSession) -> Result<(), String> {
+        let mut guard = self.active.lock().await;
+        if self
+            .vault
+            .load()
+            .is_none_or(|current| current.token != expected.token)
+        {
+            return Ok(());
+        }
+        let clearance = self.vault.clear();
+        if let Some(previous) = guard.take() {
+            previous.stop();
+        }
         self.events.emit_sync_updated(&SyncStatusDto {
             state: SyncState::Offline,
             ..SyncStatusDto::default()
         });
+        clearance
     }
 
     async fn ensure_student_session(
@@ -797,24 +890,33 @@ impl DesktopCore {
         session: &StoredSession,
     ) -> Result<Arc<AccountSession>, String> {
         let mut guard = self.active.lock().await;
+        let current = self.require_session()?;
+        if current.user_id != session.user_id
+            || current.token != session.token
+            || current.role != "student"
+        {
+            return Err("The active student session changed.".into());
+        }
         if let Some(existing) = guard.as_ref()
             && existing.account_id == session.user_id
         {
             return Ok(Arc::clone(existing));
         }
         // Drop previous account session first so its background tasks abort cleanly.
-        *guard = None;
+        if let Some(previous) = guard.take() {
+            previous.stop();
+        }
 
         let safe_id = sanitize_filename(&session.user_id);
         let db_dir = self.data_dir.join("accounts").join(&safe_id);
         std::fs::create_dir_all(&db_dir).map_err(|e| format!("create account db dir: {e}"))?;
         let db_path = db_dir.join("workspace.db");
 
-        let store = Arc::new(
-            SqliteStore::open(db_path, &session.user_id).map_err(|e| e.to_string())?,
-        );
+        let store =
+            Arc::new(SqliteStore::open(db_path, &session.user_id).map_err(|e| e.to_string())?);
         let remote = HttpRemote::new(&self.api_base_url).map_err(|e| e.to_string())?;
-        let engine = Arc::new(SyncEngine::new(Arc::clone(&store), remote).map_err(|e| e.to_string())?);
+        let engine =
+            Arc::new(SyncEngine::new(Arc::clone(&store), remote).map_err(|e| e.to_string())?);
         let wake = Arc::new(Notify::new());
 
         let mut tasks = Vec::new();
@@ -838,7 +940,9 @@ impl DesktopCore {
             let wake_run = Arc::clone(&wake);
             let token_run = session.token.clone();
             tasks.push(tokio::spawn(async move {
-                let _ = engine_run.run(&token_run, &wake_run, SYNC_POLL_INTERVAL).await;
+                let _ = engine_run
+                    .run(&token_run, &wake_run, SYNC_POLL_INTERVAL)
+                    .await;
             }));
         }
         {
@@ -1045,7 +1149,9 @@ fn build_offline_grade_request(snapshot: &Value, payload: &Value) -> Result<Grad
     };
 
     if test_cases.is_empty() {
-        return Err("No offline sample cases found. Sync once online or provide custom input.".to_string());
+        return Err(
+            "No offline sample cases found. Sync once online or provide custom input.".to_string(),
+        );
     }
 
     Ok(GradeRequest {
@@ -1151,29 +1257,32 @@ pub async fn lms_sync_status(core: State<'_, Arc<DesktopCore>>) -> Result<SyncSt
 }
 
 #[tauri::command]
-pub async fn lms_run_code_local(
-    core: State<'_, Arc<DesktopCore>>,
-    request: GradeRequest,
-) -> Result<GradeResult, String> {
-    core.run_code_local(request).await
-}
-
-#[tauri::command]
 pub async fn lms_save_code_draft(
     core: State<'_, Arc<DesktopCore>>,
+    user_id: String,
     assignment_id: String,
     language: String,
     source: String,
 ) -> Result<(), String> {
-    core.save_code_draft(&assignment_id, &language, &source).await
+    let _change = core.session_change.lock().await;
+    if core.require_session()?.user_id != user_id {
+        return Err("The active account changed.".into());
+    }
+    core.save_code_draft(&assignment_id, &language, &source)
+        .await
 }
 
 #[tauri::command]
 pub async fn lms_load_code_draft(
     core: State<'_, Arc<DesktopCore>>,
+    user_id: String,
     assignment_id: String,
     language: String,
 ) -> Result<Option<String>, String> {
+    let _change = core.session_change.lock().await;
+    if core.require_session()?.user_id != user_id {
+        return Err("The active account changed.".into());
+    }
     core.load_code_draft(&assignment_id, &language).await
 }
 
@@ -1267,10 +1376,9 @@ mod tests {
             }
             raw.extend_from_slice(&buf[..n]);
         }
-        let body = String::from_utf8_lossy(
-            &raw[header_end..raw.len().min(header_end + content_len)],
-        )
-        .to_string();
+        let body =
+            String::from_utf8_lossy(&raw[header_end..raw.len().min(header_end + content_len)])
+                .to_string();
         Some((method, path, body))
     }
 
@@ -1378,7 +1486,8 @@ mod tests {
                                 if kind == "lecture_progress"
                                     && let Some(id) = item["payload"]["lectureId"].as_i64()
                                 {
-                                    let complete = item["payload"]["complete"].as_bool().unwrap_or(false);
+                                    let complete =
+                                        item["payload"]["complete"].as_bool().unwrap_or(false);
                                     let mut guard = progress_list.lock().unwrap();
                                     guard.retain(|&x| x != id);
                                     if complete {
@@ -1399,7 +1508,10 @@ mod tests {
                                         "payload": item["payload"]
                                     }));
                                 } else if kind == "profile" {
-                                    let next_name = item["payload"]["name"].as_str().unwrap_or("Student").to_string();
+                                    let next_name = item["payload"]["name"]
+                                        .as_str()
+                                        .unwrap_or("Student")
+                                        .to_string();
                                     *profile_name.lock().unwrap() = next_name;
                                     let profile_payload = json!({ "id": "stu-1", "profile": item["payload"], "version": 2 });
                                     results.push(json!({
@@ -1441,7 +1553,12 @@ mod tests {
                                     }));
                                 }
                             }
-                            write_json_response(&mut stream, "200 OK", &json!({ "results": results })).await;
+                            write_json_response(
+                                &mut stream,
+                                "200 OK",
+                                &json!({ "results": results }),
+                            )
+                            .await;
                         }
                         ("GET", "/api/v1/sync/pull") => {
                             let since = parse_query_i64(&path, "cursor").unwrap_or(0);
@@ -1467,7 +1584,8 @@ mod tests {
                             write_json_response(&mut stream, "200 OK", &json!([])).await;
                         }
                         ("POST", "/api/v1/logout") => {
-                            write_json_response(&mut stream, "200 OK", &json!({ "ok": true })).await;
+                            write_json_response(&mut stream, "200 OK", &json!({ "ok": true }))
+                                .await;
                         }
                         _ => {
                             write_json_response(
@@ -1559,9 +1677,13 @@ mod tests {
         assert_eq!(discussions[0]["body"], "Offline test note");
 
         // 4. Local code drafts & offline Python sandbox evaluation work cleanly without server.
-        core.save_code_draft("two-sum", "python", "a, b = map(int, input().split())\nprint(a + b)")
-            .await
-            .unwrap();
+        core.save_code_draft(
+            "two-sum",
+            "python",
+            "a, b = map(int, input().split())\nprint(a + b)",
+        )
+        .await
+        .unwrap();
         let eval_res = core
             .request(
                 "/coding/evaluate",
@@ -1602,7 +1724,10 @@ mod tests {
         assert!(server.push_calls.load(Ordering::SeqCst) >= 1);
 
         // 7. Logout clears vault and session.
-        restarted.request("/logout", Some("POST"), None).await.unwrap();
+        restarted
+            .request("/logout", Some("POST"), None)
+            .await
+            .unwrap();
         assert_eq!(vault.load(), None);
         let unauth = restarted.request("/bootstrap", Some("GET"), None).await;
         assert_eq!(unauth.unwrap_err(), "Please sign in.");

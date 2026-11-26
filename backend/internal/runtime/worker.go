@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sync"
 	"time"
 
@@ -12,7 +13,9 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"vedam/lms/internal/adapters/grader"
+	"vedam/lms/internal/adapters/postgres"
 	redisadapter "vedam/lms/internal/adapters/redis"
+	"vedam/lms/internal/adapters/storage"
 	"vedam/lms/internal/domain/errs"
 )
 
@@ -31,7 +34,10 @@ func (rt *Runtime) Work(ctx context.Context) {
 			}
 		}
 	})
-	wg.Go(func() { rt.consumeGrading(ctx, uuid.NewString()) })
+	for range 2 {
+		wg.Go(func() { rt.consumeGrading(ctx, uuid.NewString()) })
+	}
+	wg.Go(func() { rt.reapSubmissionAssets(ctx) })
 	wg.Wait()
 }
 
@@ -44,37 +50,71 @@ func pause(ctx context.Context, d time.Duration) {
 	}
 }
 
+func (rt *Runtime) reapSubmissionAssets(ctx context.Context) {
+	repo := postgres.NewAssetMetaRepo(rt.Tx)
+	for ctx.Err() == nil {
+		assets, err := storage.NewLocalAssets(rt.Config.Assets)
+		if err == nil {
+			cleanup, cancel := context.WithTimeout(ctx, 5*time.Second)
+			err = repo.ReapSubmissionAssets(cleanup, func(key string) error {
+				err := assets.Remove(key)
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return err
+			})
+			cancel()
+			_ = assets.Close()
+		}
+		if err != nil && ctx.Err() == nil {
+			rt.Log.Warn("submission asset cleanup failed", "err", err)
+		}
+		pause(ctx, time.Minute)
+	}
+}
+
 func (rt *Runtime) RelayOutbox(ctx context.Context) (int, error) {
 	count := 0
-	err := rt.Tx.WithinTx(ctx, func(ctx context.Context) error {
-		events, err := rt.Sync.ClaimUnpublished(ctx, 50)
-		if err != nil {
-			return err
-		}
-		ids := make([]string, 0, len(events))
-		for _, e := range events {
+	for range 50 {
+		found := false
+		err := rt.Tx.WithinTx(ctx, func(ctx context.Context) error {
+			events, err := rt.Sync.ClaimUnpublished(ctx, 1)
+			if err != nil || len(events) == 0 {
+				return err
+			}
+			found = true
+			e := events[0]
 			var metadata struct {
 				UserID string `json:"userId"`
 			}
 			if err := json.Unmarshal(e.Payload, &metadata); err != nil {
-				return err
+				rt.Log.Warn("outbox event quarantined", "id", e.ID)
+				return rt.Sync.DeferRelay(ctx, e.ID, "Invalid event metadata", true)
 			}
 			name := e.Topic
 			if name == "cache.invalidate.bootstrap" || name == "cache.invalidate.catalog" {
 				name = "sync.available"
 			}
-			if err := rt.Cache.Invalidate(ctx, metadata.UserID); err != nil {
+			delivery, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+			defer cancel()
+			err = rt.Cache.Invalidate(delivery, metadata.UserID)
+			if err == nil {
+				err = redisadapter.Publish(delivery, rt.Redis, metadata.UserID, redisadapter.Event{ID: e.ID, Type: name, Data: e.Payload})
+			}
+			if err != nil {
+				return rt.Sync.DeferRelay(ctx, e.ID, "Redis delivery failed", false)
+			}
+			if err := rt.Sync.MarkPublished(ctx, []string{e.ID}); err != nil {
 				return err
 			}
-			if err := redisadapter.Publish(ctx, rt.Redis, metadata.UserID, redisadapter.Event{ID: e.ID, Type: name, Data: e.Payload}); err != nil {
-				return err
-			}
-			ids = append(ids, e.ID)
+			count++
+			return nil
+		})
+		if err != nil || !found {
+			return count, err
 		}
-		count = len(ids)
-		return rt.Sync.MarkPublished(ctx, ids)
-	})
-	return count, err
+	}
+	return count, nil
 }
 
 func (rt *Runtime) consumeGrading(ctx context.Context, consumer string) {
@@ -124,8 +164,19 @@ func (rt *Runtime) processJob(ctx context.Context, message redis.XMessage) error
 		}
 	case errors.Is(err, errs.ErrValidation), errors.Is(err, errs.ErrNotFound), errors.As(err, &unavailable):
 		state.Status, state.Error = "failed", err.Error()
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case errors.Is(err, context.DeadlineExceeded):
+		state.Status, state.Error = "failed", "Grading timed out."
 	default:
-		return err
+		attempts, countErr := rt.Queue.Deliveries(ctx, message.ID)
+		if countErr != nil {
+			return countErr
+		}
+		if attempts < 3 {
+			return err
+		}
+		state.Status, state.Error = "failed", "Grading failed after several attempts."
 	}
 	if err := rt.Queue.Finish(ctx, message.ID, job, state); err != nil {
 		return err

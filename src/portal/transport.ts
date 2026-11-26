@@ -299,15 +299,12 @@ export class TauriOfflineTransport implements TransportPort {
     entrypoint: string,
     source: string,
   ): Promise<void> {
-    writeLocalDraft(
-      draftStorageKey(userId, assignmentId, language, entrypoint),
-      source,
-    );
-    await invoke("lms_save_code_draft", {
-      assignmentId,
-      language,
-      source,
-    });
+    await invoke("lms_save_code_draft", { userId, assignmentId, language, source });
+    try {
+      localStorage.removeItem(draftStorageKey(userId, assignmentId, language, entrypoint));
+    } catch {
+      // The native draft is already saved.
+    }
   }
 
   async loadCodeDraft(
@@ -316,18 +313,11 @@ export class TauriOfflineTransport implements TransportPort {
     language: string,
     entrypoint: string,
   ): Promise<string | null> {
-    try {
-      const stored = await invoke<string | null>("lms_load_code_draft", {
-        assignmentId,
-        language,
-      });
-      if (stored !== null) return stored;
-    } catch {
-      /* Fall back to browser cache if desktop session isn't hydrated yet. */
-    }
-    return readLocalDraft(
-      draftStorageKey(userId, assignmentId, language, entrypoint),
-    );
+    const native = await invoke<string | null>("lms_load_code_draft", { userId, assignmentId, language });
+    if (native !== null) return native;
+    const legacy = readLocalDraft(draftStorageKey(userId, assignmentId, language, entrypoint));
+    if (legacy !== null) await this.saveCodeDraft(userId, assignmentId, language, entrypoint, legacy);
+    return legacy;
   }
 }
 

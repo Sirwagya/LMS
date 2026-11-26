@@ -2,9 +2,11 @@ package httpadapter
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -41,25 +43,60 @@ func (a *api) createSession(ctx context.Context, u *iam.User) (string, error) {
 	return token, nil
 }
 
+func nativeAuth(r *http.Request) bool {
+	return strings.HasPrefix(r.URL.Path, "/api/v1/") && r.Header.Get("X-LMS-Auth") == "bearer" &&
+		r.Header.Get("Origin") == "" && r.Header.Get("Cookie") == "" && r.Header.Get("Sec-Fetch-Site") == "" && r.Header.Get("Sec-Fetch-Mode") == ""
+}
+
+func (a *api) passwordSlot(w http.ResponseWriter) (func(), error) {
+	select {
+	case a.passwords <- struct{}{}:
+		return func() { <-a.passwords }, nil
+	default:
+		w.Header().Set("Retry-After", "1")
+		return nil, problem(429, "Authentication is busy. Try again shortly.")
+	}
+}
+
 func (a *api) signedIn(w http.ResponseWriter, u *iam.User, token string, includeToken bool) error {
-	a.cookie(w, token, int(a.SessionTTL.Seconds()))
 	response := map[string]any{"user": u.Public()}
 	if includeToken {
 		response["token"] = token
+	} else {
+		a.cookie(w, token, int(a.SessionTTL.Seconds()))
 	}
 	writeJSON(w, 200, response)
 	return nil
 }
+func demoEmail(email string) bool {
+	switch email {
+	case "student@vedam.local", "teacher@vedam.local", "admin@vedam.local":
+		return true
+	default:
+		return false
+	}
+}
+
 func (a *api) login(w http.ResponseWriter, r *http.Request) error {
-	f := read(w, r)
+	f := readBody(w, r, 4096)
 	email, password := strings.ToLower(f.text("email", "email", 254)), f.text("password", "password", 128)
 	if f.err != nil {
 		return f.err
 	}
+	if err := a.limit(w, r, "login-account", hashKey(email), "Too many attempts. Try again in a minute.", 10); err != nil {
+		return err
+	}
+	release, err := a.passwordSlot(w)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	ctx := r.Context()
 	u, err := a.Users.GetByEmail(ctx, email)
 	badLogin := problem(401, "Email or password is incorrect.")
-	if errors.Is(err, errs.ErrNotFound) {
+	if errors.Is(err, errs.ErrNotFound) || (a.Production && demoEmail(email)) {
+		_, _, _ = a.Hasher.Verify(password, "$argon2id$v=19$m=65536,t=3,p=2$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 		return badLogin
 	}
 	if err != nil {
@@ -88,7 +125,7 @@ func (a *api) login(w http.ResponseWriter, r *http.Request) error {
 	}, badLogin); err != nil {
 		return err
 	}
-	return a.signedIn(w, u, token, true)
+	return a.signedIn(w, u, token, nativeAuth(r))
 }
 func (a *api) withCurrentPassword(ctx context.Context, u *iam.User, replacement string, fn func() error, mismatch error) error {
 	return a.Tx.WithinTx(ctx, func(ctx context.Context) error {
@@ -103,6 +140,9 @@ func (a *api) withCurrentPassword(ctx context.Context, u *iam.User, replacement 
 	})
 }
 func (a *api) newUser(ctx context.Context, name, email, password string, role iam.Role) (*iam.User, error) {
+	if a.Production && demoEmail(email) {
+		return nil, invalid("This email address is reserved.")
+	}
 	hash, err := a.Hasher.Hash(password)
 	if err != nil {
 		return nil, err
@@ -117,7 +157,7 @@ func (a *api) newUser(ctx context.Context, name, email, password string, role ia
 	return user, nil
 }
 func (a *api) register(w http.ResponseWriter, r *http.Request) error {
-	f := read(w, r)
+	f := readBody(w, r, 4096)
 	name, email, password := f.text("name", "name", 100), strings.ToLower(f.text("email", "email", 254)), f.text("password", "password", 128)
 	if f.err != nil {
 		return f.err
@@ -125,6 +165,12 @@ func (a *api) register(w http.ResponseWriter, r *http.Request) error {
 	if !emailPattern.MatchString(email) || textLength(password) < 10 {
 		return invalid("Use a valid email and a password with at least 10 characters.")
 	}
+	release, err := a.passwordSlot(w)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	user, err := a.newUser(r.Context(), name, email, password, iam.RoleStudent)
 	if err != nil {
 		return err
@@ -133,7 +179,7 @@ func (a *api) register(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	return a.signedIn(w, user, token, true)
+	return a.signedIn(w, user, token, nativeAuth(r))
 }
 func (a *api) logout(w http.ResponseWriter, r *http.Request) error {
 	if err := a.Sessions.RevokeAll(r.Context(), actor(r).UserID); err != nil {
@@ -142,12 +188,29 @@ func (a *api) logout(w http.ResponseWriter, r *http.Request) error {
 	a.cookie(w, "", -1)
 	return ok(w, 200, nil)
 }
+func (a *api) revokeSession(w http.ResponseWriter, r *http.Request) error {
+	scheme, _, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !strings.EqualFold(scheme, "Bearer") {
+		return problem(401, "Bearer authentication required.")
+	}
+	state := r.Context().Value(stateKey).(*requestState)
+	if err := a.Sessions.Revoke(r.Context(), state.actor.UserID, state.token); err != nil {
+		return problem(503, "Session service unavailable.")
+	}
+	return ok(w, 200, nil)
+}
 func (a *api) password(w http.ResponseWriter, r *http.Request) error {
-	f := read(w, r)
+	f := readBody(w, r, 4096)
 	current, next := f.text("current", "current password", 128), f.text("next", "new password", 128)
 	if f.err != nil {
 		return f.err
 	}
+	release, err := a.passwordSlot(w)
+	if err != nil {
+		return err
+	}
+	defer release()
+
 	ctx := r.Context()
 	u, err := a.Users.GetByID(ctx, actor(r).UserID)
 	if err != nil {
@@ -178,7 +241,7 @@ func (a *api) password(w http.ResponseWriter, r *http.Request) error {
 	}, mismatch); err != nil {
 		return err
 	}
-	return a.signedIn(w, u, token, strings.HasPrefix(r.URL.Path, "/api/v1/"))
+	return a.signedIn(w, u, token, nativeAuth(r) && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer "))
 }
 func validateProfile(raw json.RawMessage) (string, error) {
 	f := &fields{}
@@ -190,8 +253,23 @@ func validateProfile(raw json.RawMessage) (string, error) {
 		return "", f.err
 	}
 	for _, key := range []string{"avatarUrl", "bannerUrl"} {
-		if value := f.optional(key); value != "" && !profileImage.MatchString(value) {
-			return "", invalid("Upload a PNG, JPEG, WebP or GIF image.")
+		var value string
+		image := f.values[key]
+		if len(image) == 0 {
+			continue
+		}
+		if json.Unmarshal(image, &value) != nil {
+			return "", invalid("Invalid profile image.")
+		}
+		if value == "" {
+			continue
+		}
+		prefix := profileImage.FindStringIndex(value)
+		if prefix == nil || strings.ContainsAny(value, "\r\n") || len(value) > base64.StdEncoding.EncodedLen(5<<20)+64 {
+			return "", invalid("Upload a PNG, JPEG, WebP or GIF image up to 5 MB.")
+		}
+		if data, err := base64.StdEncoding.Strict().DecodeString(value[prefix[1]:]); err != nil || len(data) == 0 || len(data) > 5<<20 {
+			return "", invalid("Invalid profile image encoding.")
 		}
 	}
 	var platforms []struct {
@@ -200,8 +278,12 @@ func validateProfile(raw json.RawMessage) (string, error) {
 	if raw := f.values["platforms"]; len(raw) > 0 && json.Unmarshal(raw, &platforms) != nil {
 		return "", invalid("Invalid profile platforms.")
 	}
+	if len(platforms) > 32 {
+		return "", invalid("Too many profile platforms.")
+	}
 	for _, p := range platforms {
-		if p.URL != "" && !strings.HasPrefix(p.URL, "https://") && !strings.HasPrefix(p.URL, "http://") {
+		u, err := url.Parse(p.URL)
+		if p.URL != "" && (len(p.URL) > 2048 || (!strings.HasPrefix(p.URL, "https://") && !strings.HasPrefix(p.URL, "http://")) || err != nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https")) {
 			return "", invalid("Profile links must begin with https:// or http://.")
 		}
 	}

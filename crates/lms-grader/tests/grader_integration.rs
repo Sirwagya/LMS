@@ -224,16 +224,18 @@ async fn resource_limits_tle_ole_mle_and_fle() {
         .expect("evaluate MLE");
     assert_eq!(mle.verdict, Verdict::MemoryLimitExceeded);
 
-    let fle = judge
+    let file_write = judge
         .evaluate(GradeRequest {
             language: Language::Python,
-            source: "for i in range(65):\n    open(f'f{i}.txt', 'w').write('x')\nprint('ok')".to_string(),
+            source:
+                "from pathlib import Path\nprint(Path.cwd().name)\nopen('student-output.txt', 'w')"
+                    .to_string(),
             entrypoint: Entrypoint::Stdin,
             test_cases: vec![test_case("", Some("ok"), false)],
         })
         .await
-        .expect("evaluate FLE");
-    assert_eq!(fle.verdict, Verdict::FileLimitExceeded);
+        .expect("evaluate file access");
+    assert_eq!(file_write.verdict, Verdict::RuntimeError);
 }
 
 #[tokio::test]

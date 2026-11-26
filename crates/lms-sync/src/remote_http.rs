@@ -15,16 +15,7 @@ pub struct HttpRemote {
 
 impl HttpRemote {
     pub fn new(base: &str) -> Result<Self, SyncError> {
-        let base = Url::parse(base).map_err(|_| invalid("invalid API base URL"))?;
-        if !matches!(base.scheme(), "http" | "https")
-            || base.host().is_none()
-            || !base.username().is_empty()
-            || base.password().is_some()
-            || base.query().is_some()
-            || base.fragment().is_some()
-        {
-            return Err(invalid("invalid API base URL"));
-        }
+        let base = Self::validate_api_origin(base)?;
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(30))
@@ -32,6 +23,24 @@ impl HttpRemote {
             .build()
             .map_err(network_error)?;
         Ok(Self { base, client })
+    }
+
+    pub fn validate_api_origin(raw: &str) -> Result<Url, SyncError> {
+        let base = Url::parse(raw).map_err(|_| invalid("invalid API base URL"))?;
+        let loopback = matches!(base.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+        if (base.scheme() != "https" && !(loopback && base.scheme() == "http"))
+            || base.host().is_none()
+            || !base.username().is_empty()
+            || base.password().is_some()
+            || base.path() != "/"
+            || base.query().is_some()
+            || base.fragment().is_some()
+        {
+            return Err(invalid(
+                "API URL must be an HTTPS origin or a loopback HTTP origin",
+            ));
+        }
+        Ok(base)
     }
 
     fn url(&self, path: &str) -> Result<Url, SyncError> {
@@ -49,7 +58,7 @@ fn network_error(error: reqwest::Error) -> SyncError {
 }
 
 async fn receive<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, SyncError> {
-    let response = request.send().await.map_err(network_error)?;
+    let mut response = request.send().await.map_err(network_error)?;
     let status = response.status();
     if status.as_u16() == 401 {
         return Err(SyncError::Unauthorized);
@@ -66,7 +75,15 @@ async fn receive<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, Sync
             retry_after_ms,
         });
     }
-    response.json::<T>().await.map_err(network_error)
+    const MAX_RESPONSE: usize = 32 << 20;
+    let mut raw = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(network_error)? {
+        if chunk.len() > MAX_RESPONSE - raw.len() {
+            return Err(invalid("sync response exceeds the size limit"));
+        }
+        raw.extend_from_slice(&chunk);
+    }
+    Ok(serde_json::from_slice(&raw)?)
 }
 
 // Keep local endpoint bookkeeping and retry counters out of the Go request.

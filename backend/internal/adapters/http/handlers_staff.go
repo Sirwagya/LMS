@@ -23,31 +23,51 @@ import (
 
 func (a *api) staffWorkspace(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
-	users, err := a.Users.ListAll(ctx)
+	const pageSize = 25
+	offsets := map[string]int{}
+	for _, key := range []string{"users", "submissions", "attendance", "fees"} {
+		page, err := queryNumber(r, key+"Page", 0, 10000, 0)
+		if err != nil {
+			return err
+		}
+		offsets[key] = int(page) * pageSize
+	}
+	isAdmin := actor(r).Role == iam.RoleAdmin
+	users, err := a.Users.ListStaffPage(ctx, isAdmin, pageSize+1, offsets["users"])
 	if err != nil {
 		return err
 	}
-	public := make([]iam.PublicUser, 0, len(users))
-	for _, u := range users {
-		public = append(public, u.Public())
-	}
-	subs, err := a.Submissions.ListAll(ctx)
+	subs, err := a.Submissions.ListPage(ctx, pageSize+1, offsets["submissions"])
 	if err != nil {
 		return err
 	}
-	attendance, err := a.Attendance.ListAll(ctx)
+	attendance, err := a.Attendance.ListPage(ctx, pageSize+1, offsets["attendance"])
 	if err != nil {
 		return err
 	}
-	fees, err := a.Invoices.ListAll(ctx)
-	if err != nil {
-		return err
+	var fees []finance.FeeInvoice
+	if isAdmin {
+		fees, err = a.Invoices.ListPage(ctx, pageSize+1, offsets["fees"])
+		if err != nil {
+			return err
+		}
 	}
-	writeJSON(w, 200, map[string]any{"users": public, "submissions": items(subs), "attendance": items(attendance), "fees": items(fees)})
+	more := map[string]bool{
+		"users": len(users) > pageSize, "submissions": len(subs) > pageSize,
+		"attendance": len(attendance) > pageSize, "fees": len(fees) > pageSize,
+	}
+	writeJSON(w, 200, map[string]any{
+		"users":       items(users[:min(len(users), pageSize)]),
+		"submissions": items(subs[:min(len(subs), pageSize)]),
+		"attendance":  items(attendance[:min(len(attendance), pageSize)]),
+		"fees":        items(fees[:min(len(fees), pageSize)]),
+		"hasMore":     more,
+	})
 	return nil
 }
+
 func (a *api) createUser(w http.ResponseWriter, r *http.Request) error {
-	f := read(w, r)
+	f := readBody(w, r, 4096)
 	name, email, password := f.text("name", "name", 100), strings.ToLower(f.text("email", "email", 254)), f.text("password", "password", 128)
 	role := iam.Role(f.optional("role"))
 	if f.err != nil {
@@ -56,7 +76,12 @@ func (a *api) createUser(w http.ResponseWriter, r *http.Request) error {
 	if (role != iam.RoleStudent && role != iam.RoleTeacher) || !emailPattern.MatchString(email) || textLength(password) < 10 {
 		return invalid("Valid email, role and a 10-character password required.")
 	}
-	_, err := a.newUser(r.Context(), name, email, password, role)
+	release, err := a.passwordSlot(w)
+	if err != nil {
+		return err
+	}
+	defer release()
+	_, err = a.newUser(r.Context(), name, email, password, role)
 	return ok(w, 201, err)
 }
 func (a *api) createInvoice(w http.ResponseWriter, r *http.Request) error {

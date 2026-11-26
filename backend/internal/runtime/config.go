@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,6 +21,9 @@ type Config struct {
 	Addr, DatabaseURL, RedisURL, Assets, Web, Grader string
 	CookieSecure, SessionSliding                     bool
 	SessionTTL                                       time.Duration
+	Production                                       bool
+	PublicOrigin                                     string
+	TrustedProxies                                   []netip.Prefix
 }
 
 func LoadConfig() (Config, error) {
@@ -64,6 +70,52 @@ func LoadConfig() (Config, error) {
 	if addr == "" {
 		addr = "127.0.0.1:" + get("PORT", "3001")
 	}
+	mode := get("APP_ENV", "development")
+	if mode != "development" && mode != "production" {
+		return Config{}, fmt.Errorf("invalid APP_ENV")
+	}
+	production := mode == "production"
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid HTTP_ADDR")
+	}
+	if !production && (net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback()) {
+		return Config{}, fmt.Errorf("development HTTP_ADDR must bind a loopback IP")
+	}
+	databaseURL, redisURL := get("DATABASE_URL", defaultDBURL), get("REDIS_URL", "redis://127.0.0.1:6379/0")
+	publicOrigin := get("PUBLIC_ORIGIN", "")
+	if production {
+		database, dbErr := url.Parse(databaseURL)
+		cache, cacheErr := url.Parse(redisURL)
+		origin, originErr := url.Parse(publicOrigin)
+		if !secure || originErr != nil || origin.Scheme != "https" || origin.Hostname() == "" || origin.User != nil ||
+			origin.Path != "" || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" {
+			return Config{}, fmt.Errorf("production requires COOKIE_SECURE=true and an HTTPS PUBLIC_ORIGIN")
+		}
+		if dbErr != nil || (database.Scheme != "postgres" && database.Scheme != "postgresql") ||
+			database.Hostname() == "" || database.Query().Get("sslmode") != "verify-full" || database.User == nil {
+			return Config{}, fmt.Errorf("production requires a PostgreSQL URL with credentials and sslmode=verify-full")
+		}
+		password, _ := database.User.Password()
+		if password == "" || password == "lms_local_dev" {
+			return Config{}, fmt.Errorf("production requires a non-demo PostgreSQL password")
+		}
+		if cacheErr != nil || cache.Scheme != "rediss" || cache.Hostname() == "" || cache.User == nil || cache.Query().Has("skip_verify") {
+			return Config{}, fmt.Errorf("production requires a TLS Redis URL with credentials")
+		}
+		password, _ = cache.User.Password()
+		if password == "" {
+			return Config{}, fmt.Errorf("production requires Redis authentication")
+		}
+	}
+	var proxies []netip.Prefix
+	for _, raw := range strings.FieldsFunc(get("TRUSTED_PROXY_CIDRS", ""), func(r rune) bool { return r == ',' }) {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
+		if err != nil || prefix.Bits() == 0 {
+			return Config{}, fmt.Errorf("invalid TRUSTED_PROXY_CIDRS")
+		}
+		proxies = append(proxies, prefix.Masked())
+	}
 	graderPath := path("GRADER_BINARY_PATH", "target/release/lms-grader")
 	if os.Getenv("GRADER_BINARY_PATH") == "" {
 		if _, err := os.Stat(graderPath); err != nil {
@@ -73,8 +125,11 @@ func LoadConfig() (Config, error) {
 			}
 		}
 	}
+	if production {
+		graderPath = ""
+	}
 	return Config{
-		Addr: addr, DatabaseURL: get("DATABASE_URL", defaultDBURL), RedisURL: get("REDIS_URL", "redis://127.0.0.1:6379/0"),
+		Addr: addr, DatabaseURL: databaseURL, RedisURL: redisURL, Production: production, PublicOrigin: publicOrigin, TrustedProxies: proxies,
 		Assets: path("ASSET_STORAGE_DIR", "backend/.data/assets"), Web: path("WEB_DIST_DIR", "dist"),
 		Grader: graderPath, CookieSecure: secure, SessionSliding: sliding, SessionTTL: time.Duration(hours) * time.Hour,
 	}, nil

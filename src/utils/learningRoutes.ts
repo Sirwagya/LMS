@@ -43,7 +43,7 @@ export function resolveLearningRoute(route: string, catalog: LectureCatalog) {
         }
       : undefined;
   }
-  if (parts[1] !== "subjects" || !catalog[parts[2]]) return undefined;
+  if (parts[1] !== "subjects" || !Object.hasOwn(catalog, parts[2])) return undefined;
   const subjectCode = parts[2];
   if (parts.length === 3)
     return {

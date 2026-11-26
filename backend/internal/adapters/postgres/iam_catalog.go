@@ -78,6 +78,30 @@ func (r *UserRepo) ListAll(ctx context.Context) ([]iam.User, error) {
 	return out, rows.Err()
 }
 
+func (r *UserRepo) ListStaffPage(ctx context.Context, admin bool, limit, offset int) ([]iam.PublicUser, error) {
+	rows, err := r.tx.Querier(ctx).Query(ctx, `
+       SELECT id,email,name,role FROM users
+       WHERE $1::boolean OR role='student'
+       ORDER BY email ASC LIMIT $2 OFFSET $3
+    `, admin, limit, offset)
+	if err != nil {
+		return nil, mapPGError(err)
+	}
+	defer rows.Close()
+	var users []iam.PublicUser
+	for rows.Next() {
+		var u iam.PublicUser
+		var role string
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &role); err != nil {
+			return nil, err
+		}
+		u.Role = iam.Role(role)
+		u.Profile = json.RawMessage(`{}`)
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
 func (r *UserRepo) Create(ctx context.Context, user *iam.User) error {
 	profile := user.Profile
 	if len(profile) == 0 {
@@ -472,4 +496,43 @@ func (r *UserRepo) UpdatePasswordIfCurrent(ctx context.Context, userID, current,
 		return true, nil
 	}
 	return true, r.UpdatePasswordHash(ctx, userID, replacement)
+}
+
+// Reap only abandoned staging rows or superseded submission attachments.
+func (r *AssetMetaRepo) ReapSubmissionAssets(ctx context.Context, remove func(string) error) error {
+	return r.tx.WithinTx(ctx, func(ctx context.Context) error {
+		q := r.tx.Querier(ctx)
+		rows, err := q.Query(ctx, `
+     SELECT id,storage_key FROM assets a
+     WHERE storage_key LIKE 'submissions/%' AND created_at < NOW()-interval '15 minutes'
+       AND NOT EXISTS (SELECT 1 FROM submissions s WHERE s.asset_id=a.id)
+     ORDER BY created_at,id LIMIT 50 FOR UPDATE OF a SKIP LOCKED
+   `)
+		if err != nil {
+			return err
+		}
+		type item struct{ id, key string }
+		var batch []item
+		for rows.Next() {
+			var v item
+			if err := rows.Scan(&v.id, &v.key); err != nil {
+				rows.Close()
+				return err
+			}
+			batch = append(batch, v)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, v := range batch {
+			if err := remove(v.key); err != nil {
+				return err
+			}
+			if _, err := q.Exec(ctx, `DELETE FROM assets WHERE id=$1`, v.id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

@@ -41,9 +41,7 @@ pub struct MacOSRuntimeResolver;
 impl RuntimeResolver for MacOSRuntimeResolver {
     fn resolve(&self) -> Result<RuntimePaths, GraderError> {
         let cached = CACHED_RUNTIME.get_or_init(detect_macos_runtime);
-        cached
-            .clone()
-            .map_err(GraderError::Unavailable)
+        cached.clone().map_err(GraderError::Unavailable)
     }
 }
 
@@ -62,6 +60,9 @@ fn detect_macos_runtime() -> Result<RuntimePaths, String> {
             "/usr/bin/python3".to_string()
         }
     });
+    if !Path::new(&python_candidate).is_absolute() {
+        return Err("LMS_PYTHON must be an absolute path.".into());
+    }
     let mut python = fs::canonicalize(&python_candidate)
         .map_err(|e| format!("Python runtime unavailable at {python_candidate}: {e}"))?;
 
@@ -130,45 +131,46 @@ impl SandboxWorkspace {
 }
 
 /// RAII guard ensuring child process group receives SIGKILL if dropped mid-execution.
-struct ProcessGroupGuard {
-    pgid: Option<libc::pid_t>,
+struct ProcessGroup {
+    pid: libc::pid_t,
+    kill_target: libc::pid_t,
+    live: std::sync::Mutex<bool>,
 }
 
-impl ProcessGroupGuard {
-    fn new(pid: u32) -> Self {
-        Self {
-            pgid: Some(pid as libc::pid_t),
-        }
-    }
-
-    fn kill_group(&self) {
-        if let Some(pgid) = self.pgid {
+impl ProcessGroup {
+    fn kill(&self) {
+        let live = self.live.lock().unwrap();
+        if *live {
             unsafe {
-                libc::kill(-pgid, libc::SIGKILL);
+                libc::kill(self.kill_target, libc::SIGKILL);
             }
         }
     }
-
-    fn disarm(&mut self) {
-        self.pgid = None;
-    }
 }
+
+struct ProcessGroupGuard(Arc<ProcessGroup>);
 
 impl Drop for ProcessGroupGuard {
     fn drop(&mut self) {
-        self.kill_group();
+        self.0.kill();
     }
 }
 
-pub fn build_seatbelt_profile(sandbox_dir: &Path, runtime: &RuntimePaths) -> String {
+fn build_seatbelt_profile(
+    sandbox_dir: &Path,
+    runtime: &RuntimePaths,
+    spec: &CommandSpec,
+) -> String {
+    // Executing student code requires source/classes and stdin/stdout only.
+    // The trusted compiler may create class files; annotation processors are disabled.
+    let workspace_writes = if spec.program == runtime.javac {
+        "file-write*"
+    } else {
+        ""
+    };
     let dir_json = serde_json::to_string(&sandbox_dir.to_string_lossy().as_ref())
         .expect("path serializes to json string");
-    let exec_literals = runtime
-        .executables()
-        .iter()
-        .map(|bin| format!("(literal {})", serde_json::to_string(bin).expect("bin json")))
-        .collect::<Vec<_>>()
-        .join(" ");
+    let executable = serde_json::to_string(&spec.program).expect("program serializes");
 
     format!(
         r#"(version 1)
@@ -176,10 +178,10 @@ pub fn build_seatbelt_profile(sandbox_dir: &Path, runtime: &RuntimePaths) -> Str
 (allow file-read-metadata)
 (allow file-map-executable)
 (allow file-read* (literal "/") (subpath "/System") (subpath "/usr") (subpath "/Library/Java") (subpath "/opt/homebrew") (subpath "/private/preboot") (subpath "/private/var/db/dyld"))
-(allow file-read* file-write* (subpath {dir_json}))
+(allow file-read* {workspace_writes} (subpath {dir_json}))
 (allow file-read* file-write* (literal "/dev/null"))
 (allow file-read* (literal "/dev/random") (literal "/dev/urandom"))
-(allow process-exec {exec_literals})
+(allow process-exec (literal {executable}))
 (allow sysctl-read)
 (allow signal (target self))
 "#
@@ -194,7 +196,9 @@ pub trait SandboxExecutor: Send + Sync {
         spec: &'a CommandSpec,
         rlimit_nofile: u64,
         stdin_data: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<ExecutionOutcome>> + Send + 'a>>;
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = io::Result<ExecutionOutcome>> + Send + 'a>,
+    >;
 }
 
 pub struct MacOSSandboxExecutor;
@@ -203,29 +207,32 @@ impl SandboxExecutor for MacOSSandboxExecutor {
     fn execute<'a>(
         &'a self,
         sandbox: &'a SandboxWorkspace,
-        _runtime: &'a RuntimePaths,
+        runtime: &'a RuntimePaths,
         spec: &'a CommandSpec,
         rlimit_nofile: u64,
         stdin_data: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = io::Result<ExecutionOutcome>> + Send + 'a>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = io::Result<ExecutionOutcome>> + Send + 'a>,
+    > {
         Box::pin(async move {
-            run_sandboxed(sandbox.path(), spec, rlimit_nofile, stdin_data).await
+            run_sandboxed(sandbox.path(), runtime, spec, rlimit_nofile, stdin_data).await
         })
     }
 }
 
 async fn run_sandboxed(
     dir: &Path,
+    runtime: &RuntimePaths,
     spec: &CommandSpec,
     rlimit_nofile: u64,
     stdin_data: &str,
 ) -> io::Result<ExecutionOutcome> {
     let start = Instant::now();
-    let profile_path = dir.join("profile.sb");
+    let profile = build_seatbelt_profile(dir, runtime, spec);
 
     let mut cmd = StdCommand::new("/usr/bin/sandbox-exec");
-    cmd.arg("-f")
-        .arg(&profile_path)
+    cmd.arg("-p")
+        .arg(&profile)
         .arg(&spec.program)
         .args(&spec.args)
         .current_dir(dir)
@@ -239,9 +246,13 @@ async fn run_sandboxed(
         .stderr(Stdio::piped());
 
     let cpu_secs = spec.cpu_limit_secs;
+    // The API supervises the whole group. Each sandboxed interpreter is
+    // prohibited from creating subprocesses, and watchdogs kill its PID only.
+    let managed = std::env::var_os("LMS_GRADER_MANAGED_GROUP").is_some_and(|value| value == "1")
+        && unsafe { libc::getpgrp() == libc::getpid() };
     unsafe {
         cmd.pre_exec(move || {
-            if libc::setpgid(0, 0) != 0 {
+            if !managed && libc::setpgid(0, 0) != 0 {
                 return Err(io::Error::last_os_error());
             }
             set_limit(libc::RLIMIT_CPU, cpu_secs, cpu_secs + 1)?;
@@ -259,7 +270,14 @@ async fn run_sandboxed(
     let std_stderr = child.stderr.take();
     drop(child);
 
-    let mut pg_guard = ProcessGroupGuard::new(pid as u32);
+    let group = Arc::new(ProcessGroup {
+        pid,
+        kill_target: if managed { pid } else { -pid },
+        live: std::sync::Mutex::new(true),
+    });
+    let _pg_guard = ProcessGroupGuard(Arc::clone(&group));
+    let group_wait = Arc::clone(&group);
+    let mut wait_handle = tokio::task::spawn_blocking(move || wait4_child(&group_wait));
 
     if let Some(raw_stdin) = std_stdin {
         let mut stdin = ChildStdin::from_std(raw_stdin)?;
@@ -279,8 +297,9 @@ async fn run_sandboxed(
             let reader = ChildStdout::from_std(raw)?;
             let reason = Arc::clone(&limit_reason);
             let counter = Arc::clone(&total_output);
+            let group = Arc::clone(&group);
             Some(tokio::spawn(async move {
-                read_capped(reader, counter, reason, pid).await
+                read_capped(reader, counter, reason, group).await
             }))
         }
         None => None,
@@ -290,8 +309,9 @@ async fn run_sandboxed(
             let reader = ChildStderr::from_std(raw)?;
             let reason = Arc::clone(&limit_reason);
             let counter = Arc::clone(&total_output);
+            let group = Arc::clone(&group);
             Some(tokio::spawn(async move {
-                read_capped(reader, counter, reason, pid).await
+                read_capped(reader, counter, reason, group).await
             }))
         }
         None => None,
@@ -301,6 +321,7 @@ async fn run_sandboxed(
     let watchdog_reason = Arc::clone(&limit_reason);
     let watchdog_dir = dir.to_path_buf();
     let mut watchdog_stop = stop_rx.clone();
+    let watchdog_group = Arc::clone(&group);
     let watchdog_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(20));
         loop {
@@ -309,11 +330,11 @@ async fn run_sandboxed(
                     if let Some(rss) = read_process_rss_bytes(pid)
                         && rss > MAX_RSS_BYTES
                     {
-                        trip_limit(&watchdog_reason, Verdict::MemoryLimitExceeded, pid).await;
+                        trip_limit(&watchdog_reason, Verdict::MemoryLimitExceeded, &watchdog_group).await;
                         break;
                     }
                     if exceeds_dir_quota(&watchdog_dir) {
-                        trip_limit(&watchdog_reason, Verdict::FileLimitExceeded, pid).await;
+                        trip_limit(&watchdog_reason, Verdict::FileLimitExceeded, &watchdog_group).await;
                         break;
                     }
                 }
@@ -324,18 +345,21 @@ async fn run_sandboxed(
         }
     });
 
-    let mut wait_handle = tokio::task::spawn_blocking(move || wait4_child(pid));
-    let wait_outcome = match tokio::time::timeout(Duration::from_millis(spec.timeout_ms), &mut wait_handle).await {
+    let wait_outcome = match tokio::time::timeout(
+        Duration::from_millis(spec.timeout_ms),
+        &mut wait_handle,
+    )
+    .await
+    {
         Ok(join_res) => join_res.map_err(io::Error::other)??,
         Err(_) => {
-            trip_limit(&limit_reason, Verdict::TimeLimitExceeded, pid).await;
+            trip_limit(&limit_reason, Verdict::TimeLimitExceeded, &group).await;
             wait_handle.await.map_err(io::Error::other)??
         }
     };
 
     let _ = stop_tx.send(true);
     let _ = watchdog_handle.await;
-    pg_guard.disarm();
 
     let mut stdout = match stdout_handle {
         Some(h) => h.await.unwrap_or_default(),
@@ -386,12 +410,20 @@ struct Wait4Outcome {
     max_rss_bytes: u64,
 }
 
-fn wait4_child(pid: libc::pid_t) -> io::Result<Wait4Outcome> {
+fn wait4_child(group: &ProcessGroup) -> io::Result<Wait4Outcome> {
+    let pid = group.pid;
     let mut raw_status: libc::c_int = 0;
     let mut rusage: libc::rusage = unsafe { std::mem::zeroed() };
     loop {
-        let rc = unsafe { libc::wait4(pid, &mut raw_status, 0, &mut rusage) };
+        let mut live = group.live.lock().unwrap();
+        let rc = unsafe { libc::wait4(pid, &mut raw_status, libc::WNOHANG, &mut rusage) };
+        if rc == 0 {
+            drop(live);
+            std::thread::sleep(Duration::from_millis(4));
+            continue;
+        }
         if rc == pid {
+            *live = false;
             break;
         }
         if rc < 0 {
@@ -399,6 +431,7 @@ fn wait4_child(pid: libc::pid_t) -> io::Result<Wait4Outcome> {
             if err.kind() == io::ErrorKind::Interrupted {
                 continue;
             }
+            *live = false;
             return Err(err);
         }
     }
@@ -417,7 +450,7 @@ async fn read_capped<R: AsyncRead + Unpin>(
     mut reader: R,
     total_output: Arc<std::sync::atomic::AtomicUsize>,
     limit_reason: Arc<Mutex<Option<Verdict>>>,
-    pgid: libc::pid_t,
+    group: Arc<ProcessGroup>,
 ) -> String {
     let mut out = Vec::new();
     let mut buf = [0u8; 4096];
@@ -428,7 +461,7 @@ async fn read_capped<R: AsyncRead + Unpin>(
                 out.extend_from_slice(&buf[..n]);
                 let prev = total_output.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
                 if prev + n > MAX_OUTPUT_BYTES {
-                    trip_limit(&limit_reason, Verdict::OutputLimitExceeded, pgid).await;
+                    trip_limit(&limit_reason, Verdict::OutputLimitExceeded, &group).await;
                     break;
                 }
             }
@@ -437,13 +470,11 @@ async fn read_capped<R: AsyncRead + Unpin>(
     String::from_utf8_lossy(&out).into_owned()
 }
 
-async fn trip_limit(reason_slot: &Mutex<Option<Verdict>>, verdict: Verdict, pgid: libc::pid_t) {
+async fn trip_limit(reason_slot: &Mutex<Option<Verdict>>, verdict: Verdict, group: &ProcessGroup) {
     let mut guard = reason_slot.lock().await;
     if guard.is_none() {
         *guard = Some(verdict);
-        unsafe {
-            libc::kill(-pgid, libc::SIGKILL);
-        }
+        group.kill();
     }
 }
 

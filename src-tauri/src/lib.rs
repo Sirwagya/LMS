@@ -10,7 +10,7 @@ use tauri::{
 
 use crate::commands::{
     DesktopCore, EventSink, TauriEventSink, lms_export_asset, lms_load_code_draft, lms_request,
-    lms_run_code_local, lms_save_code_draft, lms_sync_now, lms_sync_status,
+    lms_save_code_draft, lms_sync_now, lms_sync_status,
 };
 use crate::keychain::{MacOSKeychainVault, SessionVault};
 
@@ -148,7 +148,6 @@ pub fn run() {
             lms_request,
             lms_sync_now,
             lms_sync_status,
-            lms_run_code_local,
             lms_save_code_draft,
             lms_load_code_draft,
             lms_export_asset,

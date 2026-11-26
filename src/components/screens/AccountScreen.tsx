@@ -185,6 +185,25 @@ export function AccountScreen() {
         "SS",
       enrollmentId: draft.enrollmentId.trim() || DEFAULT_PROFILE.enrollmentId,
     };
+    if (cleaned.name.length > 100 || cleaned.platforms.length > 32) {
+      showToast("Use up to 100 characters for your name and up to 32 platforms.");
+      return;
+    }
+    for (const platform of cleaned.platforms) {
+      if (!platform.url) continue;
+      try {
+        const url = new URL(platform.url);
+        const authority = platform.url.split("://", 2)[1]?.split(/[/?#]/, 1)[0];
+        if (!authority || authority.includes("\\") ||
+            new TextEncoder().encode(platform.url).length > 2048 ||
+            !/^https?:\/\//.test(platform.url) || !url.hostname || url.username || url.password) {
+          throw new Error("Invalid link");
+        }
+      } catch {
+        showToast("Profile links must be valid HTTP or HTTPS URLs without credentials.");
+        return;
+      }
+    }
     try {
       await api("/profile", "PUT", { profile: cleaned });
       await refresh();
@@ -230,8 +249,10 @@ export function AccountScreen() {
   ) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      showToast("Please choose a valid image file.");
+    if (!["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type) ||
+        file.size === 0 || file.size > 5 * 1024 * 1024) {
+      showToast("Choose a PNG, JPEG, WebP, or GIF image up to 5 MB.");
+      event.target.value = "";
       return;
     }
     const reader = new FileReader();
@@ -388,7 +409,7 @@ export function AccountScreen() {
                 <input
                   ref={bannerInputRef}
                   type="file"
-                  accept="image/*"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
                   className="sr-only"
                   onChange={(e) => handleImageUpload(e, "bannerUrl")}
                 />
@@ -446,7 +467,7 @@ export function AccountScreen() {
                     <input
                       ref={avatarInputRef}
                       type="file"
-                      accept="image/*"
+                      accept="image/png,image/jpeg,image/webp,image/gif"
                       className="sr-only"
                       onChange={(e) => handleImageUpload(e, "avatarUrl")}
                     />

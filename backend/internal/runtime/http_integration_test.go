@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"vedam/lms/internal/adapters/crypto"
+	"vedam/lms/internal/adapters/grader"
 	redisadapter "vedam/lms/internal/adapters/redis"
 	"vedam/lms/internal/seed"
 )
@@ -35,28 +36,12 @@ type liveAPI struct {
 	URL string
 }
 
-var (
-	graderBuildOnce sync.Once
-	graderBuildErr  error
-)
+// The native grader has its own macOS integration suite. Exercise the Go
+// queue, persistence and event flow with a deterministic grading response.
+type testGrader struct{}
 
-func resolveTestGraderBinary(t *testing.T, root string) string {
-	t.Helper()
-	bin := filepath.Join(root, "target", "release", "lms-grader")
-	graderBuildOnce.Do(func() {
-		if _, err := os.Stat(bin); err == nil {
-			return
-		}
-		cmd := exec.Command("cargo", "build", "--release", "-p", "lms-grader")
-		cmd.Dir = root
-		if out, err := cmd.CombinedOutput(); err != nil {
-			graderBuildErr = fmt.Errorf("build lms-grader: %w: %s", err, out)
-		}
-	})
-	if graderBuildErr != nil {
-		t.Fatal(graderBuildErr)
-	}
-	return bin
+func (testGrader) Evaluate(_ context.Context, req grader.Request) (grader.Result, error) {
+	return grader.Result{Verdict: "Wrong Answer", Total: len(req.Cases)}, nil
 }
 
 func startAPI(t *testing.T) liveAPI {
@@ -120,12 +105,13 @@ func startAPI(t *testing.T) liveAPI {
 	query.Set("search_path", schema+",public")
 	db.RawQuery = query.Encode()
 	cfg := Config{DatabaseURL: db.String(), RedisURL: "unix://" + socket, Assets: filepath.Join(data, "assets"), Web: filepath.Join(root, "dist"),
-		Grader: resolveTestGraderBinary(t, root), SessionTTL: 24 * time.Hour}
+		SessionTTL: 24 * time.Hour}
 	rt, err := Open(ctx, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(rt.Close)
+	rt.Coding.bridge = testGrader{}
 	if err := seed.Run(ctx, rt.DB, cryptoadapter.NewDualPasswordHasher()); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +195,20 @@ func loginAs(t *testing.T, api liveAPI, role string) identity {
 	if _, err := uuid.Parse(res.header.Get("X-Request-ID")); err != nil {
 		t.Fatal(err)
 	}
-	return decode[identity](t, res)
+	account := decode[identity](t, res)
+	if account.Token != "" {
+		t.Fatal("browser auth returned a bearer token")
+	}
+	response := http.Response{Header: res.header}
+	for _, cookie := range response.Cookies() {
+		if cookie.Name == "lms_session" {
+			account.Token = cookie.Value
+		}
+	}
+	if account.Token == "" {
+		t.Fatal("missing browser session cookie")
+	}
+	return account
 }
 
 func TestHTTPRedisPostgresParity(t *testing.T) {
@@ -467,7 +466,14 @@ func TestWorkerSSEAndGradingQueue(t *testing.T) {
 	path := queued.Header.Get("Location")
 	requireStatus(t, api, 401, "GET", path, "", "", nil)
 	requireStatus(t, api, 403, "GET", path, teacher.Token, "", nil)
-	registered := decode[identity](t, requireStatus(t, api, 200, "POST", "/api/register", "", "", map[string]string{"name": "Another Student", "email": "another@vedam.local", "password": "AnotherPassword123!"}))
+	registeredReply := requireStatus(t, api, 200, "POST", "/api/register", "", "", map[string]string{"name": "Another Student", "email": "another@vedam.local", "password": "AnotherPassword123!"})
+	registered := decode[identity](t, registeredReply)
+	registeredResponse := http.Response{Header: registeredReply.header}
+	for _, cookie := range registeredResponse.Cookies() {
+		if cookie.Name == "lms_session" {
+			registered.Token = cookie.Value
+		}
+	}
 	requireStatus(t, api, 404, "GET", path, registered.Token, "", nil)
 	if err := api.Queue.Initialize(ctx); err != nil {
 		t.Fatal(err)
@@ -489,5 +495,72 @@ func TestWorkerSSEAndGradingQueue(t *testing.T) {
 	history := decode[[]json.RawMessage](t, requireStatus(t, api, 200, "GET", "/api/coding/history?assignmentId=coding-two-sum", student.Token, "", nil))
 	if len(history) != 1 {
 		t.Fatalf("grading retry wrote %d attempts", len(history))
+	}
+}
+
+func TestOutboxQuarantinesMalformedRowAndDeliversNext(t *testing.T) {
+	api := startAPI(t)
+	ctx := t.Context()
+	_, err := api.DB.Exec(ctx, `
+		INSERT INTO outbox_events(id, aggregate_id, topic, payload, created_at)
+		VALUES ('malformed', 'test', 'sync.available', '{"userId":42}', NOW() - interval '1 second'),
+		       ('valid', 'test', 'sync.available', '{"userId":""}', NOW())`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered, err := api.RelayOutbox(ctx)
+	if err != nil || delivered != 1 {
+		t.Fatalf("expected one delivered event, got %d: %v", delivered, err)
+	}
+	var quarantined, published bool
+	err = api.DB.QueryRow(ctx, `SELECT
+		(SELECT relay_failed_at IS NOT NULL FROM outbox_events WHERE id='malformed'),
+		(SELECT published_at IS NOT NULL FROM outbox_events WHERE id='valid')`).Scan(&quarantined, &published)
+	if err != nil || !quarantined || !published {
+		t.Fatalf("quarantined=%t published=%t err=%v", quarantined, published, err)
+	}
+}
+
+func TestRevokeBearerOnlyEndsCurrentSession(t *testing.T) {
+	api := startAPI(t)
+	first := loginAs(t, api, "student")
+	second := loginAs(t, api, "student")
+	requireStatus(t, api, 200, "POST", "/api/v1/session/revoke", first.Token, "", map[string]any{})
+	requireStatus(t, api, 401, "GET", "/api/bootstrap", first.Token, "", nil)
+	requireStatus(t, api, 200, "GET", "/api/bootstrap", second.Token, "", nil)
+}
+
+func TestStaffWorkspacePagesPeopleAndKeepsFeesAdminOnly(t *testing.T) {
+	api := startAPI(t)
+	teacher := loginAs(t, api, "teacher")
+	admin := loginAs(t, api, "admin")
+	_, err := api.DB.Exec(t.Context(), `
+		INSERT INTO users(id, email, name, role, password_hash)
+		SELECT 'pagination-' || n, 'pagination-' || lpad(n::text, 2, '0') || '@vedam.local',
+		       'Test student ' || n, 'student', 'unused-in-test'
+		FROM generate_series(1, 28) AS n`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type directory struct {
+		Users   []struct{ ID, Role string }
+		Fees    []json.RawMessage
+		HasMore map[string]bool
+	}
+	first := decode[directory](t, requireStatus(t, api, 200, "GET", "/api/staff", teacher.Token, "", nil))
+	second := decode[directory](t, requireStatus(t, api, 200, "GET", "/api/staff?usersPage=1", teacher.Token, "", nil))
+	if len(first.Users) != 25 || !first.HasMore["users"] || len(second.Users) != 4 || second.HasMore["users"] {
+		t.Fatalf("unexpected page boundaries: %d then %d", len(first.Users), len(second.Users))
+	}
+	seen := map[string]bool{}
+	for _, u := range append(first.Users, second.Users...) {
+		if seen[u.ID] || u.Role != "student" {
+			t.Fatalf("unexpected user in teacher pages: %s (%s)", u.ID, u.Role)
+		}
+		seen[u.ID] = true
+	}
+	adminPage := decode[directory](t, requireStatus(t, api, 200, "GET", "/api/staff", admin.Token, "", nil))
+	if len(first.Fees) != 0 || len(second.Fees) != 0 || len(adminPage.Fees) == 0 {
+		t.Fatal("fee visibility changed across staff roles")
 	}
 }

@@ -5,7 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"syscall"
+	"time"
 
 	"vedam/lms/internal/domain/errs"
 )
@@ -67,12 +70,11 @@ func (b Binary) Evaluate(ctx context.Context, req Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	cmd := exec.CommandContext(ctx, b.Path)
-	cmd.Stdin = bytes.NewReader(data)
-	raw, err := cmd.Output()
+	raw, err := b.run(ctx, data)
 	if err != nil {
-		return Result{}, fmt.Errorf("start sandboxed grader (%s): %w", b.Path, err)
+		return Result{}, err
 	}
+
 	var response struct {
 		Result  Result `json:"result"`
 		Status  int    `json:"status"`
@@ -102,4 +104,50 @@ func (b Binary) Evaluate(ctx context.Context, req Request) (Result, error) {
 		}
 	}
 	return result, nil
+}
+
+// Keep the judge slot occupied until the supervisor exits and its process group
+// is terminated on cancellation. Rust handles SIGTERM first so it can reap the
+// sandbox child itself. The group fallback covers a wedged supervisor.
+func (b Binary) run(ctx context.Context, data []byte) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	tmp, err := os.MkdirTemp("", "lms-grade-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(tmp)
+	cmd := exec.Command(b.Path)
+	cmd.Stdin = bytes.NewReader(data)
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Env = append(cmd.Environ(), "TMPDIR="+tmp, "LMS_GRADER_MANAGED_GROUP=1")
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start sandboxed grader: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			// An abnormal supervisor exit can leave a child in the same group.
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			return nil, fmt.Errorf("sandboxed grader exited: %w", err)
+		}
+		return output.Bytes(), nil
+	case <-ctx.Done():
+		_ = cmd.Process.Signal(syscall.SIGTERM)
+		grace := time.NewTimer(2 * time.Second)
+		defer grace.Stop()
+		select {
+		case <-done:
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		case <-grace.C:
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			<-done
+		}
+		return nil, ctx.Err()
+	}
 }

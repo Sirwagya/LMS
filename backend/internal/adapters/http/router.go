@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 )
 
 type Users interface {
+	ListStaffPage(context.Context, bool, int, int) ([]iam.PublicUser, error)
 	iam.UserReader
 	iam.UserWriter
 	UpdatePasswordIfCurrent(context.Context, string, string, string) (bool, error)
@@ -55,6 +57,7 @@ type Progress interface {
 	Version(context.Context, string, int64) (int64, bool, int64, error)
 }
 type Invoices interface {
+	ListPage(context.Context, int, int) ([]financedomain.FeeInvoice, error)
 	financedomain.InvoiceReader
 	financedomain.InvoiceWriter
 }
@@ -70,6 +73,9 @@ type Dependencies struct {
 	Sessions       *redisadapter.Sessions
 	Cache          *redisadapter.Cache
 	CookieSecure   bool
+	PublicOrigin   string
+	Production     bool
+	TrustedProxies []netip.Prefix
 	SessionSliding bool
 	SessionTTL     time.Duration
 	Web            http.Handler
@@ -79,23 +85,36 @@ type Dependencies struct {
 	Catalog        Catalog
 	Notices        catalog.NoticeRepository
 	Assignments    Assignments
-	Submissions    assessment.SubmissionRepository
-	Attendance     learning.AttendanceReader
-	Progress       Progress
-	Invoices       Invoices
-	Academic       Academic
-	Sync           Sync
-	AssetMeta      catalog.AssetMetadataRepository
-	Assets         *storage.LocalAssets
-	Bootstrap      *workspace.BootstrapService
-	Learning       *learningapp.Service
-	Staff          *staff.Service
-	Payments       *finance.PayInvoiceService
-	Coding         CodingService
-	Queue          *redisadapter.Queue
+	Submissions    interface {
+		assessment.SubmissionRepository
+		ListPage(context.Context, int, int) ([]assessment.Submission, error)
+	}
+	Attendance interface {
+		learning.AttendanceReader
+		ListPage(context.Context, int, int) ([]learning.AttendanceSummary, error)
+	}
+	Discussions interface {
+		GetByID(context.Context, string) (learning.Discussion, error)
+	}
+	Progress  Progress
+	Invoices  Invoices
+	Academic  Academic
+	Sync      Sync
+	AssetMeta catalog.AssetMetadataRepository
+	Assets    *storage.LocalAssets
+	Bootstrap *workspace.BootstrapService
+	Learning  *learningapp.Service
+	Staff     *staff.Service
+	Payments  *finance.PayInvoiceService
+	Coding    CodingService
+	Queue     *redisadapter.Queue
 }
 
-type api struct{ Dependencies }
+type api struct {
+	Dependencies
+	passwords chan struct{}
+	streams   streamSlots
+}
 type endpoint func(http.ResponseWriter, *http.Request) error
 type access string
 
@@ -114,7 +133,7 @@ type route struct {
 }
 
 func New(d Dependencies) http.Handler {
-	a := &api{d}
+	a := &api{Dependencies: d, passwords: make(chan struct{}, 4)}
 	mux := http.NewServeMux()
 	routes := []route{
 		{"GET", "/health", public, a.health},
@@ -158,6 +177,7 @@ func New(d Dependencies) http.Handler {
 		{"GET", "/sync/pull", authenticated, a.pull},
 		{"POST", "/sync/push", authenticated, a.push},
 		{"GET", "/events", authenticated, a.events},
+		{"POST", "/session/revoke", authenticated, a.revokeSession},
 		{"GET", "/coding/jobs/{id}", student, a.gradingJob},
 		{"GET", "/program-enrolments", authenticated, a.programs},
 		{"GET", "/semesters", authenticated, a.semesters},
