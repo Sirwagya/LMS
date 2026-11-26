@@ -26,6 +26,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"vedam/lms/internal/adapters/crypto"
+	"vedam/lms/internal/adapters/grader"
 	redisadapter "vedam/lms/internal/adapters/redis"
 	"vedam/lms/internal/seed"
 )
@@ -35,28 +36,12 @@ type liveAPI struct {
 	URL string
 }
 
-var (
-	graderBuildOnce sync.Once
-	graderBuildErr  error
-)
+// The native grader has its own macOS integration suite. Exercise the Go
+// queue, persistence and event flow with a deterministic grading response.
+type testGrader struct{}
 
-func resolveTestGraderBinary(t *testing.T, root string) string {
-	t.Helper()
-	bin := filepath.Join(root, "target", "release", "lms-grader")
-	graderBuildOnce.Do(func() {
-		if _, err := os.Stat(bin); err == nil {
-			return
-		}
-		cmd := exec.Command("cargo", "build", "--release", "-p", "lms-grader")
-		cmd.Dir = root
-		if out, err := cmd.CombinedOutput(); err != nil {
-			graderBuildErr = fmt.Errorf("build lms-grader: %w: %s", err, out)
-		}
-	})
-	if graderBuildErr != nil {
-		t.Fatal(graderBuildErr)
-	}
-	return bin
+func (testGrader) Evaluate(_ context.Context, req grader.Request) (grader.Result, error) {
+	return grader.Result{Verdict: "Wrong Answer", Total: len(req.Cases)}, nil
 }
 
 func startAPI(t *testing.T) liveAPI {
@@ -120,12 +105,13 @@ func startAPI(t *testing.T) liveAPI {
 	query.Set("search_path", schema+",public")
 	db.RawQuery = query.Encode()
 	cfg := Config{DatabaseURL: db.String(), RedisURL: "unix://" + socket, Assets: filepath.Join(data, "assets"), Web: filepath.Join(root, "dist"),
-		Grader: resolveTestGraderBinary(t, root), SessionTTL: 24 * time.Hour}
+		SessionTTL: 24 * time.Hour}
 	rt, err := Open(ctx, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(rt.Close)
+	rt.Coding.bridge = testGrader{}
 	if err := seed.Run(ctx, rt.DB, cryptoadapter.NewDualPasswordHasher()); err != nil {
 		t.Fatal(err)
 	}
