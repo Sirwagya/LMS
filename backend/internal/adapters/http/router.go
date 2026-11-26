@@ -215,6 +215,8 @@ func New(d Dependencies) http.Handler {
 				{"POST", "/contests/{id}/appeal", student, a.contestSubmitAppeal},
 				{"GET", "/staff/contests/{id}/integrity", staffOnly, a.contestReviewQueue},
 				{"GET", "/staff/contests/{id}/attempts/{attemptId}/replay", staffOnly, a.contestAttemptReplay},
+				{"GET", "/staff/contests/{id}/attempts/{attemptId}/media", staffOnly, a.contestListProctorMedia},
+				{"GET", "/staff/contests/{id}/media/{mediaId}", staffOnly, a.contestGetProctorMedia},
 				{"POST", "/staff/contests/{id}/reviewers", staffOnly, a.contestAssignReviewer},
 				{"POST", "/staff/contests/{id}/attempts/{attemptId}/review", staffOnly, a.contestDecideReview},
 				{"POST", "/staff/contests/{id}/appeals/{appealId}/resolve", staffOnly, a.contestResolveAppeal},
@@ -240,6 +242,7 @@ func New(d Dependencies) http.Handler {
 		a.mount(mux, "/api/v1", route{"POST", "/contests/{id}/attempt", student, a.contestAttempt})
 		if d.ContestIntegrity != nil {
 			a.mount(mux, "/api/v1", route{"POST", "/contests/{id}/events", student, a.contestIngestEvents})
+			a.mount(mux, "/api/v1", route{"POST", "/contests/{id}/media", student, a.contestUploadProctorMedia})
 		}
 	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { a.failure(w, r, problem(404, "Endpoint not found.")) })

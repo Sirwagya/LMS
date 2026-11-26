@@ -313,6 +313,104 @@ func TestDetectBatchSignals(t *testing.T) {
 	}
 }
 
+func TestProctoringEventsAndSignals(t *testing.T) {
+	const (
+		attemptID = "11111111-1111-4111-8111-111111111111"
+		deviceID  = "22222222-2222-4222-8222-222222222222"
+		batchID   = "33333333-3333-4333-8333-333333333333"
+	)
+	now := time.Now().UTC()
+	events := []EventInput{
+		{
+			Seq:       1,
+			EventType: "app.opened",
+			ClientAt:  &now,
+			Payload:   map[string]any{"apps": []any{map[string]any{"name": "Safari", "bundleId": "com.apple.Safari", "pid": 42}}},
+		},
+		{Seq: 2, EventType: "proctor.camera_lost", ClientAt: &now, Payload: map[string]any{}},
+		{Seq: 3, EventType: "proctor.mic_lost", ClientAt: &now, Payload: map[string]any{}},
+		{Seq: 4, EventType: "proctor.screen_lost", ClientAt: &now, Payload: map[string]any{}},
+	}
+	if err := ValidateEventBatch(EventBatchInput{
+		AttemptID: attemptID,
+		DeviceID:  deviceID,
+		BatchID:   batchID,
+		Events:    events,
+	}); err != nil {
+		t.Fatalf("expected proctoring events batch to validate, got %v", err)
+	}
+
+	signals := DetectBatchSignals(events)
+	if len(signals) != 4 {
+		t.Fatalf("expected 4 high-severity signals, got %+v", signals)
+	}
+	wantKinds := []string{"app_opened", "proctor_camera_lost", "proctor_mic_lost", "proctor_screen_lost"}
+	for i, kind := range wantKinds {
+		if signals[i].Kind != kind || signals[i].Severity != "high" {
+			t.Fatalf("signal %d = %+v, want kind=%q severity=high", i, signals[i], kind)
+		}
+	}
+	if !strings.Contains(signals[0].Summary, "Safari") {
+		t.Fatalf("expected app name in summary, got %q", signals[0].Summary)
+	}
+}
+
+func TestValidateProctorMediaInput(t *testing.T) {
+	const (
+		attemptID = "11111111-1111-4111-8111-111111111111"
+		deviceID  = "22222222-2222-4222-8222-222222222222"
+	)
+	now := time.Now().UTC()
+
+	cases := []struct {
+		rawType  string
+		wantType string
+		wantExt  string
+	}{
+		{"video/webm;codecs=vp8,opus", "video/webm", "webm"},
+		{"video/mp4", "video/mp4", "mp4"},
+		{"audio/webm;codecs=opus", "audio/webm", "webm"},
+		{"image/jpeg", "image/jpeg", "jpg"},
+		{"image/png", "image/png", "png"},
+	}
+	for _, tc := range cases {
+		in := ProctorMediaInput{
+			AttemptID:   attemptID,
+			DeviceID:    deviceID,
+			Kind:        "camera_audio",
+			Seq:         1,
+			ContentType: tc.rawType,
+			DurationMS:  15000,
+			CapturedAt:  now,
+			ByteSize:    1024,
+		}
+		ext, err := ValidateProctorMediaInput(&in)
+		if err != nil {
+			t.Fatalf("expected %q to validate, got %v", tc.rawType, err)
+		}
+		if ext != tc.wantExt || in.ContentType != tc.wantType {
+			t.Fatalf("got ext=%q contentType=%q, want ext=%q contentType=%q", ext, in.ContentType, tc.wantExt, tc.wantType)
+		}
+	}
+
+	invalidCases := []ProctorMediaInput{
+		{AttemptID: "bad", DeviceID: deviceID, Kind: "camera_audio", Seq: 1, ContentType: "video/webm", CapturedAt: now, ByteSize: 10},
+		{AttemptID: attemptID, DeviceID: deviceID, Kind: "audio_only", Seq: 1, ContentType: "video/webm", CapturedAt: now, ByteSize: 10},
+		{AttemptID: attemptID, DeviceID: deviceID, Kind: "screen_snapshot", Seq: 0, ContentType: "image/jpeg", CapturedAt: now, ByteSize: 10},
+		{AttemptID: attemptID, DeviceID: deviceID, Kind: "screen_snapshot", Seq: 1, ContentType: "image/svg+xml", CapturedAt: now, ByteSize: 10},
+		{AttemptID: attemptID, DeviceID: deviceID, Kind: "screen_snapshot", Seq: 1, ContentType: "text/html", CapturedAt: now, ByteSize: 10},
+		{AttemptID: attemptID, DeviceID: deviceID, Kind: "screen_video", Seq: 1, ContentType: "video/webm", CapturedAt: now, ByteSize: 0},
+		{AttemptID: attemptID, DeviceID: deviceID, Kind: "screen_video", Seq: 1, ContentType: "video/webm", CapturedAt: now, ByteSize: MaxProctorMediaBytes + 1},
+		{AttemptID: attemptID, DeviceID: deviceID, Kind: "screen_video", Seq: 1, ContentType: "video/webm", CapturedAt: time.Time{}, ByteSize: 10},
+		{AttemptID: attemptID, DeviceID: deviceID, Kind: "screen_video", Seq: 1, ContentType: "video/webm", DurationMS: -1, CapturedAt: now, ByteSize: 10},
+	}
+	for i, bad := range invalidCases {
+		if _, err := ValidateProctorMediaInput(&bad); !errors.Is(err, errs.ErrValidation) {
+			t.Fatalf("case %d: expected ErrValidation for %+v, got %v", i, bad, err)
+		}
+	}
+}
+
 func TestValidateDecisionsAndAppeals(t *testing.T) {
 	dec := ReviewDecisionInput{Status: "cleared", Reason: "  Verified legitimate work.  "}
 	if err := ValidateReviewDecision(&dec); err != nil {

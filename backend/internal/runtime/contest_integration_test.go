@@ -224,6 +224,7 @@ func TestContestMigrationRollbackOnDisposableDB(t *testing.T) {
 		"assessment_result_releases",
 		"assessment_leaderboard_entries",
 		"assessment_student_reports",
+		"assessment_proctor_media",
 	}
 
 	assertTables := func(wantExist bool) {
@@ -257,7 +258,7 @@ func TestContestMigrationRollbackOnDisposableDB(t *testing.T) {
 		t.Fatalf("initial Up failed: %v", err)
 	}
 	assertTables(true)
-	assertMigrationCount(8)
+	assertMigrationCount(9)
 
 	if err := migrations.Down(ctx, pool); err != nil {
 		t.Fatalf("Down failed: %v", err)
@@ -268,7 +269,7 @@ func TestContestMigrationRollbackOnDisposableDB(t *testing.T) {
 	if err := migrations.Up(ctx, pool); err != nil {
 		t.Fatalf("re-apply Up failed: %v", err)
 	}
-	assertMigrationCount(8)
+	assertMigrationCount(9)
 	assertTables(true)
 }
 

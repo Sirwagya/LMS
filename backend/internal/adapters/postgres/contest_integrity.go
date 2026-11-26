@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 	"time"
@@ -1401,6 +1402,273 @@ func (r *ContestIntegrityRepo) PurgeExpiredEvidence(ctx context.Context) (int64,
 		return nil
 	})
 	return totalDeleted, err
+}
+
+func (r *ContestIntegrityRepo) RecordProctorMedia(ctx context.Context, assessmentID, studentID string, in contest.ProctorMediaInput) (contest.ProctorMediaItem, error) {
+	var item contest.ProctorMediaItem
+	aid, ok := parseCanonicalUUID(assessmentID)
+	if !ok {
+		return item, errs.ErrNotFound
+	}
+	if _, err := contest.ValidateProctorMediaInput(&in); err != nil {
+		return item, err
+	}
+	if strings.TrimSpace(in.StorageKey) == "" {
+		return item, contest.Invalid("Provide a valid proctoring media storage key.")
+	}
+	attemptID, _ := parseCanonicalUUID(in.AttemptID)
+	deviceID, _ := parseCanonicalUUID(in.DeviceID)
+
+	err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
+		q := r.tx.Querier(ctx)
+		var lockedDevice string
+		var submittedAt *time.Time
+		var now time.Time
+		err := q.QueryRow(ctx, `
+			SELECT device_id::text, submitted_at, clock_timestamp()
+			FROM assessment_attempts
+			WHERE id = $1::uuid AND assessment_id = $2::uuid AND student_id = $3
+			FOR UPDATE
+		`, attemptID, aid, studentID).Scan(&lockedDevice, &submittedAt, &now)
+		if err != nil {
+			return mapPGError(err)
+		}
+		if lockedDevice != deviceID {
+			return errs.New(errs.ErrConflict, "ATTEMPT_DEVICE_MISMATCH", "This device session is no longer active for the attempt.")
+		}
+		if submittedAt != nil && now.After(submittedAt.Add(120*time.Second)) {
+			return errs.New(errs.ErrConflict, "ATTEMPT_CLOSED", "The proctoring media upload window for this submitted attempt has closed.")
+		}
+
+		var existingCount int
+		if err := q.QueryRow(ctx, `
+			SELECT count(*) FROM assessment_proctor_media
+			WHERE attempt_id = $1::uuid
+		`, attemptID).Scan(&existingCount); err != nil {
+			return mapPGError(err)
+		}
+		if existingCount >= contest.MaxProctorMediaItemsPerAttempt {
+			return errs.New(errs.ErrRateLimited, "PROCTOR_MEDIA_QUOTA", "Proctoring media quota exceeded for this attempt.")
+		}
+
+		capturedAt := in.CapturedAt.UTC()
+		item = contest.ProctorMediaItem{
+			AttemptID:    attemptID,
+			AssessmentID: aid,
+			Kind:         in.Kind,
+			Seq:          in.Seq,
+			ContentType:  in.ContentType,
+			ByteSize:     in.ByteSize,
+			DurationMS:   in.DurationMS,
+			CapturedAt:   capturedAt,
+			StorageKey:   in.StorageKey,
+		}
+		err = q.QueryRow(ctx, `
+			INSERT INTO assessment_proctor_media (
+				attempt_id, assessment_id, student_id, kind, seq,
+				content_type, storage_key, byte_size, duration_ms, captured_at
+			)
+			VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9, $10)
+			RETURNING id::text, created_at
+		`, attemptID, aid, studentID, in.Kind, in.Seq, in.ContentType, in.StorageKey, in.ByteSize, in.DurationMS, capturedAt).Scan(&item.ID, &item.CreatedAt)
+		if err != nil {
+			return mapPGError(err)
+		}
+		return nil
+	})
+	return item, err
+}
+
+func (r *ContestIntegrityRepo) ListProctorMedia(ctx context.Context, actor contest.Actor, assessmentID, attemptID string) ([]contest.ProctorMediaItem, error) {
+	items := make([]contest.ProctorMediaItem, 0)
+	aid, ok := parseCanonicalUUID(assessmentID)
+	if !ok {
+		return items, errs.ErrNotFound
+	}
+	attID, ok := parseCanonicalUUID(attemptID)
+	if !ok {
+		return items, errs.ErrNotFound
+	}
+
+	err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
+		q := r.tx.Querier(ctx)
+		if err := requireReviewerAccess(ctx, q, actor, aid); err != nil {
+			return err
+		}
+
+		var attemptExists bool
+		if err := q.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM assessment_attempts
+				WHERE id = $1::uuid AND assessment_id = $2::uuid
+			)
+		`, attID, aid).Scan(&attemptExists); err != nil {
+			return mapPGError(err)
+		}
+		if !attemptExists {
+			return errs.ErrNotFound
+		}
+
+		if _, err := q.Exec(ctx, `
+			INSERT INTO assessment_evidence_access_log (assessment_id, attempt_id, actor_id, action, detail)
+			VALUES ($1::uuid, $2::uuid, $3, 'proctor_media.list', '')
+		`, aid, attID, actor.ID); err != nil {
+			return mapPGError(err)
+		}
+
+		rows, err := q.Query(ctx, `
+			SELECT id::text, attempt_id::text, assessment_id::text, kind, seq,
+			       content_type, byte_size, duration_ms, captured_at, created_at, storage_key
+			FROM assessment_proctor_media
+			WHERE attempt_id = $1::uuid AND assessment_id = $2::uuid
+			ORDER BY captured_at ASC, kind ASC, seq ASC
+		`, attID, aid)
+		if err != nil {
+			return mapPGError(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var item contest.ProctorMediaItem
+			if err := rows.Scan(
+				&item.ID, &item.AttemptID, &item.AssessmentID, &item.Kind, &item.Seq,
+				&item.ContentType, &item.ByteSize, &item.DurationMS, &item.CapturedAt, &item.CreatedAt, &item.StorageKey,
+			); err != nil {
+				return err
+			}
+			items = append(items, item)
+		}
+		return rows.Err()
+	})
+	return items, err
+}
+
+func (r *ContestIntegrityRepo) GetProctorMedia(ctx context.Context, actor contest.Actor, assessmentID, mediaID string) (contest.ProctorMediaItem, error) {
+	var item contest.ProctorMediaItem
+	aid, ok := parseCanonicalUUID(assessmentID)
+	if !ok {
+		return item, errs.ErrNotFound
+	}
+	mid, ok := parseCanonicalUUID(mediaID)
+	if !ok {
+		return item, errs.ErrNotFound
+	}
+
+	err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
+		q := r.tx.Querier(ctx)
+		if err := requireReviewerAccess(ctx, q, actor, aid); err != nil {
+			return err
+		}
+
+		err := q.QueryRow(ctx, `
+			SELECT id::text, attempt_id::text, assessment_id::text, kind, seq,
+			       content_type, byte_size, duration_ms, captured_at, created_at, storage_key
+			FROM assessment_proctor_media
+			WHERE id = $1::uuid AND assessment_id = $2::uuid
+		`, mid, aid).Scan(
+			&item.ID, &item.AttemptID, &item.AssessmentID, &item.Kind, &item.Seq,
+			&item.ContentType, &item.ByteSize, &item.DurationMS, &item.CapturedAt, &item.CreatedAt, &item.StorageKey,
+		)
+		if err != nil {
+			return mapPGError(err)
+		}
+
+		_, err = q.Exec(ctx, `
+			INSERT INTO assessment_evidence_access_log (assessment_id, attempt_id, actor_id, action, detail)
+			VALUES ($1::uuid, $2::uuid, $3, 'proctor_media.view', $4)
+		`, aid, item.AttemptID, actor.ID, fmt.Sprintf("Viewed %s seq %d (%s)", item.Kind, item.Seq, item.ID))
+		return mapPGError(err)
+	})
+	return item, err
+}
+
+func (r *ContestIntegrityRepo) PurgeExpiredProctorMedia(ctx context.Context, removeFile func(string) error) (int64, error) {
+	const batchLimit = 200
+	var totalDeleted int64
+
+	for {
+		var batchCount int
+		err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
+			q := r.tx.Querier(ctx)
+			rows, err := q.Query(ctx, `
+				SELECT m.id::text, m.assessment_id::text, m.storage_key
+				FROM assessment_proctor_media m
+				LEFT JOIN assessment_reviews rv ON rv.attempt_id = m.attempt_id
+				WHERE (
+					(rv.attempt_id IS NOT NULL AND rv.retain_until <= clock_timestamp())
+					OR (rv.attempt_id IS NULL AND m.created_at <= clock_timestamp() - interval '30 days')
+				)
+				  AND NOT EXISTS (
+				      SELECT 1 FROM assessment_appeals ap
+				      WHERE ap.attempt_id = m.attempt_id
+				        AND ap.status IN ('open', 'in_review')
+				  )
+				ORDER BY m.created_at ASC, m.id ASC
+				LIMIT $1
+				FOR UPDATE OF m SKIP LOCKED
+			`, batchLimit)
+			if err != nil {
+				return mapPGError(err)
+			}
+
+			type doomedMedia struct {
+				id           string
+				assessmentID string
+				storageKey   string
+			}
+			doomed := make([]doomedMedia, 0)
+			for rows.Next() {
+				var row doomedMedia
+				if err := rows.Scan(&row.id, &row.assessmentID, &row.storageKey); err != nil {
+					rows.Close()
+					return err
+				}
+				doomed = append(doomed, row)
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return err
+			}
+			rows.Close()
+
+			batchCount = len(doomed)
+			if batchCount == 0 {
+				return nil
+			}
+
+			perAssessment := make(map[string]int64)
+			for _, item := range doomed {
+				if removeFile != nil {
+					if err := removeFile(item.storageKey); err != nil && !errors.Is(err, fs.ErrNotExist) {
+						return err
+					}
+				}
+				if _, err := q.Exec(ctx, `
+					DELETE FROM assessment_proctor_media WHERE id = $1::uuid
+				`, item.id); err != nil {
+					return mapPGError(err)
+				}
+				perAssessment[item.assessmentID]++
+				totalDeleted++
+			}
+
+			for aid, cnt := range perAssessment {
+				if _, err := q.Exec(ctx, `
+					INSERT INTO assessment_evidence_access_log (assessment_id, actor_id, action, detail)
+					VALUES ($1::uuid, 'system', 'proctor_media.purged', $2)
+				`, aid, fmt.Sprintf("Purged %d expired proctoring media item(s)", cnt)); err != nil {
+					return mapPGError(err)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return totalDeleted, err
+		}
+		if batchCount < batchLimit {
+			break
+		}
+	}
+	return totalDeleted, nil
 }
 
 func scanReviewSummary(row pgx.Rows) (contest.ReviewSummary, error) {

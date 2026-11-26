@@ -72,8 +72,29 @@ func (rt *Runtime) expireContestAttempts(ctx context.Context) {
 func (rt *Runtime) purgeContestEvidence(ctx context.Context) {
 	repo := postgres.NewContestIntegrityRepo(rt.Tx)
 	for ctx.Err() == nil {
+		assets, err := storage.NewLocalAssets(rt.Config.Assets)
+		if err != nil {
+			if ctx.Err() == nil {
+				rt.Log.Warn("contest proctor media cleanup unavailable", "err", err)
+			}
+		} else {
+			sweepMedia, cancelMedia := context.WithTimeout(ctx, 5*time.Second)
+			_, mediaErr := repo.PurgeExpiredProctorMedia(sweepMedia, func(key string) error {
+				err := assets.Remove(key)
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
+				return err
+			})
+			cancelMedia()
+			_ = assets.Close()
+			if mediaErr != nil && ctx.Err() == nil {
+				rt.Log.Warn("contest proctor media retention sweep failed", "err", mediaErr)
+			}
+		}
+
 		sweep, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_, err := repo.PurgeExpiredEvidence(sweep)
+		_, err = repo.PurgeExpiredEvidence(sweep)
 		cancel()
 		if err != nil && ctx.Err() == nil {
 			rt.Log.Warn("contest evidence retention sweep failed", "err", err)

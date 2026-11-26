@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"mime"
 	"slices"
 	"strings"
 	"time"
@@ -13,10 +14,12 @@ import (
 )
 
 const (
-	MaxEventBatchSize       = 50
-	MaxAttemptClientEvents  = 2000
-	MaxPasteAutoFlagChars   = 400
-	SimilarityFlagThreshold = 0.70
+	MaxEventBatchSize              = 50
+	MaxAttemptClientEvents         = 2000
+	MaxPasteAutoFlagChars          = 400
+	SimilarityFlagThreshold        = 0.70
+	MaxProctorMediaBytes           = 5 * 1024 * 1024
+	MaxProctorMediaItemsPerAttempt = 300
 
 	maxEventPayloadBytes = 8192
 	maxReasonRunes       = 2000
@@ -161,6 +164,32 @@ type ResolveAppealInput struct {
 	Resolution string `json:"resolution"`
 }
 
+type ProctorMediaItem struct {
+	ID           string    `json:"id"`
+	AttemptID    string    `json:"attemptId"`
+	AssessmentID string    `json:"assessmentId"`
+	Kind         string    `json:"kind"`
+	Seq          int       `json:"seq"`
+	ContentType  string    `json:"contentType"`
+	ByteSize     int       `json:"byteSize"`
+	DurationMS   int       `json:"durationMs"`
+	CapturedAt   time.Time `json:"capturedAt"`
+	CreatedAt    time.Time `json:"createdAt"`
+	StorageKey   string    `json:"-"`
+}
+
+type ProctorMediaInput struct {
+	AttemptID   string    `json:"attemptId"`
+	DeviceID    string    `json:"deviceId"`
+	Kind        string    `json:"kind"`
+	Seq         int       `json:"seq"`
+	ContentType string    `json:"contentType"`
+	DurationMS  int       `json:"durationMs"`
+	CapturedAt  time.Time `json:"capturedAt"`
+	StorageKey  string    `json:"-"`
+	ByteSize    int       `json:"-"`
+}
+
 type IntegrityRepository interface {
 	IngestEvents(ctx context.Context, assessmentID, studentID string, batch EventBatchInput) (EventBatchResult, error)
 	SubmitAppeal(ctx context.Context, assessmentID, studentID string, cmd AppealInput) (Appeal, error)
@@ -172,21 +201,89 @@ type IntegrityRepository interface {
 	ResolveAppeal(ctx context.Context, actor Actor, assessmentID, appealID string, cmd ResolveAppealInput) (Appeal, error)
 	ComputeSimilarity(ctx context.Context, actor Actor, assessmentID string) ([]SimilarityPair, error)
 	PurgeExpiredEvidence(ctx context.Context) (int64, error)
+	RecordProctorMedia(ctx context.Context, assessmentID, studentID string, in ProctorMediaInput) (ProctorMediaItem, error)
+	ListProctorMedia(ctx context.Context, actor Actor, assessmentID, attemptID string) ([]ProctorMediaItem, error)
+	GetProctorMedia(ctx context.Context, actor Actor, assessmentID, mediaID string) (ProctorMediaItem, error)
+	PurgeExpiredProctorMedia(ctx context.Context, removeFile func(string) error) (int64, error)
 }
 
 var validClientEventTypes = map[string]bool{
-	"nav.question":     true,
-	"mcq.selected":     true,
-	"code.snapshot":    true,
-	"code.delta":       true,
-	"code.run":         true,
-	"editor.paste":     true,
-	"window.focus":     true,
-	"window.blur":      true,
-	"fullscreen.enter": true,
-	"fullscreen.exit":  true,
-	"heartbeat.gap":    true,
-	"client.reconnect": true,
+	"nav.question":        true,
+	"mcq.selected":        true,
+	"code.snapshot":       true,
+	"code.delta":          true,
+	"code.run":            true,
+	"editor.paste":        true,
+	"window.focus":        true,
+	"window.blur":         true,
+	"fullscreen.enter":    true,
+	"fullscreen.exit":     true,
+	"heartbeat.gap":       true,
+	"client.reconnect":    true,
+	"app.opened":          true,
+	"proctor.camera_lost": true,
+	"proctor.mic_lost":    true,
+	"proctor.screen_lost": true,
+}
+
+var validProctorMediaKinds = map[string]bool{
+	"camera_audio":    true,
+	"screen_snapshot": true,
+	"screen_video":    true,
+}
+
+var proctorMediaExtensions = map[string]string{
+	"video/webm": "webm",
+	"video/mp4":  "mp4",
+	"audio/webm": "webm",
+	"image/jpeg": "jpg",
+	"image/png":  "png",
+}
+
+// NormalizeProctorMediaType validates a proctoring media MIME type against the
+// allowlist (stripping optional parameters such as unquoted codecs) and returns
+// the normalized base MIME type and file extension.
+func NormalizeProctorMediaType(raw string) (baseType, ext string, ok bool) {
+	base, _, _ := strings.Cut(strings.TrimSpace(raw), ";")
+	mediaType, _, err := mime.ParseMediaType(strings.TrimSpace(base))
+	if err != nil {
+		return "", "", false
+	}
+	mediaType = strings.ToLower(mediaType)
+	ext, ok = proctorMediaExtensions[mediaType]
+	if !ok {
+		return "", "", false
+	}
+	return mediaType, ext, true
+}
+
+// ValidateProctorMediaInput validates a proctoring media upload payload,
+// normalizing its MIME type and returning the corresponding file extension.
+func ValidateProctorMediaInput(in *ProctorMediaInput) (string, error) {
+	if !isUUID(in.AttemptID) || !isUUID(in.DeviceID) {
+		return "", Invalid("Provide valid attempt and device identifiers.")
+	}
+	if !validProctorMediaKinds[in.Kind] {
+		return "", Invalid("Unsupported proctoring media kind.")
+	}
+	if in.Seq < 1 {
+		return "", Invalid("Media sequence number must be at least 1.")
+	}
+	if in.DurationMS < 0 {
+		return "", Invalid("Media duration must be non-negative.")
+	}
+	if in.CapturedAt.IsZero() {
+		return "", Invalid("Provide a valid media capture timestamp.")
+	}
+	if in.ByteSize <= 0 || in.ByteSize > MaxProctorMediaBytes {
+		return "", Invalid(fmt.Sprintf("Media chunk size must be between 1 and %d bytes.", MaxProctorMediaBytes))
+	}
+	baseType, ext, ok := NormalizeProctorMediaType(in.ContentType)
+	if !ok {
+		return "", Invalid("Unsupported proctoring media content type.")
+	}
+	in.ContentType = baseType
+	return ext, nil
 }
 
 var prohibitedPrivacyKeys = map[string]bool{
@@ -412,9 +509,71 @@ func DetectBatchSignals(events []EventInput) []ReviewSignal {
 				Severity:   "medium",
 				OccurredAt: ev.ClientAt,
 			})
+		case "app.opened":
+			summary := "External application opened during contest"
+			if names := extractOpenedAppNames(ev.Payload); len(names) > 0 {
+				summary = fmt.Sprintf("External application opened during contest (%s)", strings.Join(names, ", "))
+			}
+			signals = append(signals, ReviewSignal{
+				Kind:       "app_opened",
+				Summary:    summary,
+				Severity:   "high",
+				OccurredAt: ev.ClientAt,
+			})
+		case "proctor.camera_lost":
+			signals = append(signals, ReviewSignal{
+				Kind:       "proctor_camera_lost",
+				Summary:    "Camera proctoring stream lost",
+				Severity:   "high",
+				OccurredAt: ev.ClientAt,
+			})
+		case "proctor.mic_lost":
+			signals = append(signals, ReviewSignal{
+				Kind:       "proctor_mic_lost",
+				Summary:    "Microphone proctoring stream lost",
+				Severity:   "high",
+				OccurredAt: ev.ClientAt,
+			})
+		case "proctor.screen_lost":
+			signals = append(signals, ReviewSignal{
+				Kind:       "proctor_screen_lost",
+				Summary:    "Screen proctoring stream lost",
+				Severity:   "high",
+				OccurredAt: ev.ClientAt,
+			})
 		}
 	}
 	return signals
+}
+
+func extractOpenedAppNames(payload map[string]any) []string {
+	if payload == nil {
+		return nil
+	}
+	rawApps, ok := payload["apps"].([]any)
+	if !ok || len(rawApps) == 0 {
+		return nil
+	}
+	names := make([]string, 0, min(len(rawApps), 3))
+	for _, item := range rawApps {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := m["name"].(string)
+		name = strings.TrimSpace(name)
+		if name == "" {
+			name, _ = m["bundleId"].(string)
+			name = strings.TrimSpace(name)
+		}
+		if name != "" {
+			names = append(names, name)
+			if len(names) >= 3 {
+				break
+			}
+		}
+	}
+	return names
 }
 
 // MissingIntervals computes contiguous missing sequence intervals starting from 1.

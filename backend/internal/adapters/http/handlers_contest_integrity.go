@@ -1,14 +1,19 @@
 package httpadapter
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"vedam/lms/internal/domain/contest"
+	"vedam/lms/internal/domain/errs"
 )
 
 func contestSubID(r *http.Request, key, msg string) (string, error) {
@@ -191,5 +196,123 @@ func (a *api) contestComputeSimilarity(w http.ResponseWriter, r *http.Request) e
 		return missing(err, "Contest not found.")
 	}
 	writeJSON(w, 200, map[string]any{"pairs": pairs})
+	return nil
+}
+
+func (a *api) contestUploadProctorMedia(w http.ResponseWriter, r *http.Request) error {
+	if !strings.HasPrefix(strings.ToLower(r.Header.Get("Authorization")), "bearer ") ||
+		r.Header.Get("X-LMS-Contest-Client") != "macos" ||
+		!nativeRequest(r) {
+		return problem(403, "Open this contest in the LMS macOS app.")
+	}
+	if a.Assets == nil {
+		return problem(503, "Media storage unavailable.")
+	}
+	id, err := contestID(r)
+	if err != nil {
+		return err
+	}
+	var body struct {
+		AttemptID   string    `json:"attemptId"`
+		DeviceID    string    `json:"deviceId"`
+		Kind        string    `json:"kind"`
+		Seq         int       `json:"seq"`
+		ContentType string    `json:"contentType"`
+		DurationMS  int       `json:"durationMs"`
+		CapturedAt  time.Time `json:"capturedAt"`
+		DataBase64  string    `json:"dataBase64"`
+	}
+	if err := decodeContestJSON(w, r, 7_500_000, &body); err != nil {
+		return err
+	}
+	rawBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(body.DataBase64))
+	if err != nil {
+		return invalid("Provide valid base64-encoded media data.")
+	}
+	if len(rawBytes) == 0 {
+		return invalid("Media payload cannot be empty.")
+	}
+	if len(rawBytes) > contest.MaxProctorMediaBytes {
+		return problem(413, "Media chunk exceeds 5 MB limit.")
+	}
+
+	in := contest.ProctorMediaInput{
+		AttemptID:   body.AttemptID,
+		DeviceID:    body.DeviceID,
+		Kind:        body.Kind,
+		Seq:         body.Seq,
+		ContentType: body.ContentType,
+		DurationMS:  body.DurationMS,
+		CapturedAt:  body.CapturedAt,
+		ByteSize:    len(rawBytes),
+	}
+	ext, err := contest.ValidateProctorMediaInput(&in)
+	if err != nil {
+		return err
+	}
+	attemptUUID, _ := uuid.Parse(strings.TrimSpace(in.AttemptID))
+	key := filepath.Join("contests", id, attemptUUID.String(), fmt.Sprintf("%s-%d-%s.%s", in.Kind, in.Seq, uuid.NewString(), ext))
+	if !filepath.IsLocal(key) {
+		return invalid("Invalid media storage key.")
+	}
+	in.StorageKey = key
+
+	if err := a.Assets.Put(r.Context(), key, rawBytes); err != nil {
+		return err
+	}
+	item, err := a.ContestIntegrity.RecordProctorMedia(r.Context(), id, actor(r).UserID, in)
+	if err != nil {
+		_ = a.Assets.Remove(key)
+		return missing(err, "Contest attempt not found.")
+	}
+	writeJSON(w, 201, item)
+	return nil
+}
+
+func (a *api) contestListProctorMedia(w http.ResponseWriter, r *http.Request) error {
+	id, err := contestID(r)
+	if err != nil {
+		return err
+	}
+	attemptID, err := contestSubID(r, "attemptId", "Attempt not found.")
+	if err != nil {
+		return err
+	}
+	list, err := a.ContestIntegrity.ListProctorMedia(r.Context(), contestActor(r), id, attemptID)
+	if err != nil {
+		return missing(err, "Attempt not found.")
+	}
+	writeJSON(w, 200, map[string]any{"items": items(list)})
+	return nil
+}
+
+func (a *api) contestGetProctorMedia(w http.ResponseWriter, r *http.Request) error {
+	if a.Assets == nil {
+		return problem(503, "Media storage unavailable.")
+	}
+	id, err := contestID(r)
+	if err != nil {
+		return err
+	}
+	mediaID, err := contestSubID(r, "mediaId", "Proctoring media not found.")
+	if err != nil {
+		return err
+	}
+	item, err := a.ContestIntegrity.GetProctorMedia(r.Context(), contestActor(r), id, mediaID)
+	if err != nil {
+		return missing(err, "Proctoring media not found.")
+	}
+	f, err := a.Assets.Open(r.Context(), item.StorageKey)
+	if errors.Is(err, errs.ErrNotFound) {
+		return problem(404, "Proctoring media not found.")
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	filename := filepath.Base(item.StorageKey)
+	fileHeaders(w, filename, item.ContentType, false)
+	http.ServeContent(w, r, filename, item.CreatedAt, f)
 	return nil
 }
