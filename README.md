@@ -1,121 +1,356 @@
-# Vedam LMS — local student and staff portals
+# Vedam LMS
 
-A working local learning management system built with React, TypeScript, Vite and a Go, PostgreSQL and Redis backend. The shared 60/30/10 theme supports light and dark modes.
+Vedam LMS is a local, full-stack learning management system with separate student and staff experiences. It combines a React web interface, a Go API, PostgreSQL persistence, Redis services, Rust coding tools, and an optional macOS Tauri desktop shell.
 
-## Run
+The project is designed for local demos and development. It does not provide real payments, email delivery, institutional identity integration, or production-grade remote code execution.
 
-Requires **Node.js 24+**, **Go 1.26+**, **PostgreSQL 17** and **Redis 7**. Use the services in `docker-compose.yml` or the local setup in [Phase 1](docs/phases/PHASE-1-GO-CORE-AND-POSTGRES.md#1-local-infrastructure-setup). To initialize the database and start development:
+## Contents
 
-```sh
+- [What You Can Do](#what-you-can-do)
+- [System Overview](#system-overview)
+- [Technology Stack](#technology-stack)
+- [Quick Start](#quick-start)
+- [Demo Accounts](#demo-accounts)
+- [Project Structure](#project-structure)
+- [Development Commands](#development-commands)
+- [Configuration](#configuration)
+- [Coding Challenges](#coding-challenges)
+- [Desktop App](#desktop-app)
+- [Testing](#testing)
+- [Documentation](#documentation)
+- [Safety and Scope](#safety-and-scope)
+
+## What You Can Do
+
+### Students
+
+- Sign in, register, sign out, and change a password.
+- Browse semesters, subjects, lectures, lecture notes, attachments, and recordings.
+- Mark lectures complete and participate in lecture discussions.
+- Submit written or coding assignments and review feedback and grades.
+- View attendance, performance summaries, schedules, notices, and invoices.
+- Save a profile, coding profile, profile photo, and banner.
+- Preview and pay seeded invoices through a clearly labeled simulation.
+
+### Teachers
+
+- Review the staff dashboard and submissions awaiting grading.
+- Create and update courses and lectures.
+- Publish lecture notes, downloadable resources, recordings, and assignments.
+- Grade written submissions and record student attendance.
+- Publish class sessions and notices.
+- Create coding challenges with public example tests and hidden test cases.
+
+### Administrators
+
+- Perform all teacher operations.
+- Create student and teacher accounts.
+- Issue invoices and review the fee ledger.
+- Manage local staff and student records.
+
+Public registration always creates a student. Staff accounts cannot be created through public registration.
+
+## System Overview
+
+```mermaid
+flowchart LR
+    Student["Student"] --> UI["React + TypeScript"]
+    Teacher["Teacher"] --> UI
+    Admin["Administrator"] --> UI
+    Desktop["Optional macOS Tauri shell"] --> UI
+
+    UI -->|HTTP and SSE| API["Go HTTP API"]
+    API --> App["Application services"]
+    App --> Domain["Domain and repository ports"]
+
+    Domain --> PG[("PostgreSQL")]
+    Domain --> Redis[("Redis")]
+    App --> Assets["Local asset storage"]
+    App --> Grader["Rust coding grader"]
+
+    Worker["Go background worker"] --> Redis
+    Worker --> PG
+    Worker --> Grader
+```
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Web as React UI
+    participant API as Go API
+    participant DB as PostgreSQL
+    participant Redis as Redis
+    participant Worker as Background Worker
+
+    User->>Web: Submit an action
+    Web->>API: HTTP request
+    API->>Redis: Validate session and rate limits
+    API->>DB: Run an atomic business transaction
+    DB-->>API: Committed result
+    API-->>Web: Response
+    API-->>Redis: Enqueue or publish a side effect
+    Worker->>Redis: Claim queued work
+    Worker->>DB: Relay outbox or update grading result
+    Worker-->>Web: SSE notification
+```
+
+PostgreSQL is the source of truth for users, academic data, submissions, grades, attendance, fees, and sync metadata. Redis provides sessions, rate limiting, cache projections, Pub/Sub notifications, and background streams. Uploaded files are stored on disk.
+
+## Technology Stack
+
+| Area | Technology |
+| --- | --- |
+| Web UI | React 19, TypeScript, Vite, Tailwind CSS |
+| API | Go, `net/http`, PostgreSQL, Redis |
+| Database | PostgreSQL 17 |
+| Cache and jobs | Redis 7 |
+| Code grading | Rust workspace and macOS local sandbox |
+| Desktop | Tauri v2 and Rust |
+| Offline desktop storage | SQLite through `lms-sync` |
+| Editor | CodeMirror |
+
+## Quick Start
+
+### Prerequisites
+
+- Node.js 24 or newer
+- Go 1.26 or newer
+- Rust and Cargo
+- Docker with Docker Compose
+- macOS is required for the local Java/Python sandbox
+
+### 1. Start PostgreSQL and Redis
+
+```bash
+docker compose up -d
+docker compose ps
+```
+
+This starts PostgreSQL on `127.0.0.1:5432` and Redis on `127.0.0.1:6379`.
+
+### 2. Configure the environment
+
+```bash
+cp .env.example .env
+```
+
+The defaults match `docker-compose.yml`. Environment variables override values in `.env`.
+
+### 3. Install dependencies and seed the database
+
+```bash
 npm ci
 (cd backend && go run ./cmd/seed)
+```
+
+The seed command applies database migrations and adds the demo users and local fixtures. Use `--reset` to drop and recreate the application schema:
+
+```bash
+(cd backend && go run ./cmd/seed --reset)
+```
+
+### 4. Start the development stack
+
+```bash
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. The development command starts the Go API on port 3001, the outbox and grading worker, and Vite on port 5173. For a compiled app with one server:
+This builds the Rust grader, starts the Go API and worker, and launches Vite.
 
-```sh
+Open **http://127.0.0.1:5173**.
+
+To build and serve the web app through Go on port `3001`:
+
+```bash
 npm run build
 npm start
 ```
 
-Open http://127.0.0.1:3001. Both servers bind to localhost. Stop with Ctrl+C.
+Open **http://127.0.0.1:3001**.
 
-## Demo accounts
+Stop development processes with `Ctrl+C`.
+
+## Demo Accounts
 
 | Portal | Email | Password |
 | --- | --- | --- |
-| Student | student@vedam.local | VedamLocal123! |
-| Teacher | teacher@vedam.local | VedamLocal123! |
-| Administrator | admin@vedam.local | VedamLocal123! |
+| Student | `student@vedam.local` | `VedamLocal123!` |
+| Teacher | `teacher@vedam.local` | `VedamLocal123!` |
+| Administrator | `admin@vedam.local` | `VedamLocal123!` |
 
-These are intentionally public **local sample accounts**. The student demo has seeded academic records. New student registrations start with zero attendance, no invoices and no results. All students can access the local course catalog. Administrators create additional student and teacher accounts through People. Public registration always creates a student; it cannot create staff accounts.
+These are intentionally public local sample accounts. Demo accounts are disabled in production mode.
 
-## Student workflows
+The seeded student contains illustrative academic records. A newly registered student starts without attendance, invoices, or results.
 
-- Sign in / register, sign out, and change password.
-- Search courses, browse semesters and lecture notes, download included sample notes and teacher-uploaded materials, watch uploaded MP4/WebM recordings.
-- Mark lectures complete; ask questions in lecture discussions.
-- Submit assignment answers/project links with an optional attachment (10 MB), update ungraded work, view teacher grades and feedback. Graded work is locked.
-- Review attendance, performance charts and the attendance planner. Recent course results are read-only staff evaluations.
-- Browse published calendar/day agenda/weekly schedule and notices.
-- Save account details, coding profiles, profile photo and banner to the backend. No profile is stored in browser localStorage; only the theme preference is.
-- Review invoices, simulate payment and download clearly labeled sample receipts. No card information or real payments are involved. Duplicate payments are rejected.
+## Project Structure
 
-## Teacher and administrator workflows
+```text
+.
+├── src/                         # React web UI
+│   ├── components/              # Layout, screens, and reusable UI
+│   ├── context/                 # LMS application state
+│   ├── portal/                  # Student, staff, contest, and coding portals
+│   └── data/                    # Seeded UI data and academic helpers
+├── backend/
+│   ├── cmd/                     # API, worker, seed, and maintenance commands
+│   ├── internal/
+│   │   ├── domain/              # Entities and repository contracts
+│   │   ├── application/         # Commands and workflows
+│   │   ├── adapters/            # HTTP, PostgreSQL, Redis, storage, and grader
+│   │   └── runtime/             # Dependency and server composition
+│   ├── migrations/              # PostgreSQL schema migrations
+│   └── internal/seed/           # Demo fixtures
+├── crates/
+│   ├── lms-grader/              # Rust Java/Python grading binary
+│   └── lms-sync/                # Offline SQLite sync engine
+├── src-tauri/                   # Native macOS Tauri shell
+├── tests/                       # Node.js integration and route tests
+├── docs/                        # Architecture and implementation notes
+└── docker-compose.yml           # Local PostgreSQL and Redis services
+```
 
-- Staff overview with students, course counts and submissions awaiting review.
-- Create courses; update names and instructors.
-- Publish and edit lecture notes. Upload downloadable materials and small MP4/WebM recordings (10 MB per file).
-- Publish assignments, review student text/attachments and enter grades with feedback.
-- Record cumulative student attendance with count validation.
-- Publish dated class sessions; overlapping sessions are rejected. Edit announcements and publish notices.
-- Administrators additionally issue student invoices and create student/teacher accounts. Teachers cannot access these admin-only operations.
+## Development Commands
 
-## Data and implementation
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Build the grader and start the API, worker, and Vite |
+| `npm run dev:web` | Start only the Vite development server |
+| `npm run build` | Type-check and build the web app into `dist/` |
+| `npm start` | Build and run the Go API and worker |
+| `npm run lint` | Lint TypeScript and JavaScript |
+| `npm test` | Run Rust, JavaScript, and Node test suites |
+| `npm run desktop:dev` | Run the Tauri desktop app in development |
+| `npm run desktop:build` | Build the macOS desktop bundle |
 
-`backend/cmd/api` serves the authenticated API and compiled frontend. PostgreSQL stores accounts, catalog, course activity, grading and the simulated payment ledger. Redis stores sessions, rate limits, cached workspace projections and the grading queue. Uploaded files live in `backend/.data/assets` by default. The seed command initializes local demo data. The demo biometric fixture uses a synthetic embedding.
+Useful backend commands:
 
-Copy `.env.example` to `.env` to customize connection URLs, `HTTP_ADDR`, asset storage and cookie security. Process environment variables take precedence over the file. If the API port changes during Vite development, update the proxy in `vite.config.ts`.
+```bash
+(cd backend && go run ./cmd/api)
+(cd backend && go run ./cmd/worker)
+(cd backend && go test ./...)
+(cd backend && go run ./cmd/reconcile-assets)
+```
 
-The web app authenticates with an expiring HttpOnly SameSite cookie. Browser sign-in sets an HttpOnly cookie. Native clients request bearer authentication on the v1 auth endpoints with `X-LMS-Auth: bearer`. Set `SESSION_SLIDING=true` to renew the session on authenticated requests. New passwords use Argon2id, and successful login upgrades legacy scrypt hashes. Password changes and logout revoke existing sessions. The API enforces role checks, data ownership, upload limits and Redis-backed rate limits.
+## Configuration
 
-The Go seed command initializes PostgreSQL from the checked-in fixtures. Existing SQLite files under `.data` are preserved on disk. Moving records created in the former SQLite app into PostgreSQL requires a separate data migration.
+Copy `.env.example` to `.env`, then adjust values as needed.
 
-This version is intended for local demo use. It does not connect to an institution, email provider, external video host, payment gateway or production identity service. Seeded historical academic records and receipts are illustrative. There is no email password recovery; use the documented sample accounts or another locally created account. Deleting/archiving historical academic records is intentionally not offered in the UI.
+| Variable | Local default | Purpose |
+| --- | --- | --- |
+| `HTTP_ADDR` | `127.0.0.1:3001` | API and static-app listen address |
+| `DATABASE_URL` | Local `lms_dev` PostgreSQL | Application database |
+| `TEST_DATABASE_URL` | Local `lms_test` PostgreSQL | Integration test database |
+| `REDIS_URL` | `redis://127.0.0.1:6379/0` | Sessions and jobs |
+| `ASSET_STORAGE_DIR` | `backend/.data/assets` | Uploaded files |
+| `GRADER_BINARY_PATH` | `target/release/lms-grader` | Rust grader binary |
+| `SESSION_TTL_HOURS` | `24` | Session lifetime |
+| `SESSION_SLIDING` | `false` | Renew sessions on authenticated requests |
+| `COOKIE_SECURE` | `false` | Require HTTPS-only session cookies |
 
-## Validation
+The API uses an HttpOnly, SameSite session cookie for web clients. Native clients use bearer authentication and `X-LMS-Auth: bearer`.
 
-```sh
-npm run build
-npm run lint
+For production-shaped configuration, `APP_ENV=production` requires:
+
+- An HTTPS `PUBLIC_ORIGIN`
+- `COOKIE_SECURE=true`
+- PostgreSQL with `sslmode=verify-full`
+- Authenticated TLS Redis with a `rediss://` URL
+- A non-demo database password
+- Explicit trusted proxy CIDRs when running behind a proxy
+
+Production also disables demo accounts, demo seeding, and the local macOS grader.
+
+## Coding Challenges
+
+Open **Assignments → Solve coding challenge** to use the student workspace. The editor supports Java and Python, saved drafts, example runs, custom input, hidden-test submissions, diagnostics, and submission history.
+
+Java solutions may define:
+
+```java
+public class Solution {
+    public int[] twoSum(int[] nums, int target) {
+        // your solution
+    }
+}
+```
+
+Python solutions may define:
+
+```python
+class Solution:
+    def twoSum(self, nums, target):
+        # your solution
+        pass
+```
+
+New challenges use `Solution.solve(input)` for Java and Python by default. Hidden tests and expected answers are withheld from student API responses.
+
+The local runner uses an isolated temporary directory and the Rust grader:
+
+- OS sandbox and process restrictions
+- CPU and wall-clock limits
+- Source, input, output, and concurrency limits
+- Separate trusted compilation limits
+- Limited Java heap
+
+This is a local teaching runner, not a hardened multi-tenant judge. Public or multi-tenant hosting should use an isolated container or virtual-machine execution provider.
+
+## Desktop App
+
+The macOS Tauri app reuses the React frontend and provides native Keychain storage, notifications, a local SQLite store, and a Rust sync engine.
+
+```bash
+npm run desktop:dev
+```
+
+The desktop app requires macOS and the same local infrastructure as the web app. Switching accounts revokes the active bearer session.
+
+## Testing
+
+Create the test database once for PostgreSQL integration tests:
+
+```bash
+docker compose exec postgres createdb -U lms lms_test
+```
+
+Run all tests:
+
+```bash
 npm test
 (cd backend && go test -race -tags=integration ./...)
 ```
 
-HTTP tests use temporary schemas in the PostgreSQL database specified by `TEST_DATABASE_URL` (default `lms_test`), and start disposable Redis instances using `redis-server`. Set `TEST_REDIS_SERVER` to exercise a specific Redis version. The PostgreSQL repository contract tests reset the application schema in `lms_test`. The HTTP suite covers the student and staff workflows against Go, including persistence after restart, grading, authorization, sync and payments.
+The integration suite uses disposable Redis instances and temporary PostgreSQL schemas. Set `TEST_REDIS_SERVER` to use a specific Redis executable.
 
-## Design and maintainability
+Test categories include:
 
-See [architecture and SOLID decisions](docs/ARCHITECTURE.md) for module boundaries, repository ports, dependency injection and transaction semantics.
+- Repository and database contracts
+- Authentication and role authorization
+- Student and staff workflows
+- Assignment and submission behavior
+- Grading and contest flows
+- Sync and payments
+- Persistence across API restarts
 
-## Java / Python coding assignments
+## Documentation
 
-Open **Assignments → Solve coding challenge**. The coding workspace includes a CodeMirror editor with highlighting, line numbers, indentation, Java/Python switching, per-user local drafts, example/custom-input runs, hidden-test submission judging, diagnostics and saved submission history. Accepted submissions receive a server-calculated grade and appear in the teacher's submissions list. The Go seed includes two sample problems, Two Sum and Valid Parentheses. Teachers can create more challenges in **Assignments → Create coding challenge**, including public and hidden stdin/stdout test cases.
+- [Architecture and SOLID decisions](docs/ARCHITECTURE.md)
+- [System design and topology](docs/SYSTEM-DESIGN.md)
+- [Phase 1: Go and PostgreSQL](docs/phases/PHASE-1-GO-CORE-AND-POSTGRES.md)
+- [Phase 2: API and Redis](docs/phases/PHASE-2-GO-API-REDIS-AND-PARITY.md)
+- [Phase 3: Rust grader](docs/phases/PHASE-3-RUST-CODE-GRADER.md)
+- [Phase 4: Offline sync](docs/phases/PHASE-4-RUST-OFFLINE-SYNC-ENGINE.md)
+- [Phase 5: Tauri app](docs/phases/PHASE-5-MACOS-TAURI-APP.md)
+- [Phase 6: Contests](docs/phases/PHASE-6-CONTESTS.md)
 
-Use `public class Main` in Java, or a normal stdin/stdout program in Python. Java/Python run using the machine's installed runtimes. This local implementation requires **macOS**, `/usr/bin/sandbox-exec`, Python (default `/opt/homebrew/bin/python3`) and a JDK discoverable by `/usr/libexec/java_home`. `LMS_PYTHON` and `JAVA_HOME` override runtime locations. Unsupported hosts fail closed; there is no unrestricted execution fallback.
+## Safety and Scope
 
-Each run uses an isolated temporary directory with a clean environment. The OS sandbox blocks networking, private user-file access and child-process creation. CPU, wall-clock, source, input, output, and concurrency limits are enforced. Student programs use stdin and stdout and cannot write files. The parent monitors memory, and the trusted Java compilation step has separate file limits. Java uses a limited heap. The macOS memory monitor is polling-based, not a hard container memory quota. This is a **local teaching runner**, not a production multi-tenant judge; sandbox-exec is a deprecated macOS interface. Use an isolated container/VM execution provider for public deployment.
+Vedam LMS is a demonstration project. It includes:
 
-Hidden test inputs, expected answers and output are removed from student API responses. Only staff can configure them. Run checks examples; Submit checks all cases. A custom run displays stdout without an expected-answer verdict. Up to 20 recent submission attempts are shown. Written assignments lock after grading. Coding assignments accept repeated attempts.
+- Seeded academic records
+- Simulated payments and labeled sample receipts
+- Local file storage
+- Local Java/Python execution on macOS
+- Public demo credentials
 
-
-### Method-only solutions and history
-
-Two Sum now exposes only `Solution.twoSum(nums, target)` (`int[]` return in Java, list of indices in Python); Valid Parentheses exposes `Solution.isValid(s)` returning a boolean. New teacher-created challenges expose `Solution.solve(input)` returning a string. Imports, input parsing, the executable entry point and output serialization are supplied by the runner. Existing custom stdin/stdout challenges keep their original contract. The method editor uses a separate draft namespace so full-program drafts remain available.
-
-The problem pane has dedicated Description / Submissions tabs. The submission panel lists verdict, language, passed tests, time, timestamp and submitted source; select any attempt for its code and test details, copy it, or load compatible code into the editor. Older full-program attempts remain available for reference. Repeated coding submissions are supported after acceptance; unsuccessful attempts do not remove the last accepted grade. Written assignments retain their existing graded-submission lock.
-
-
-### Subject → lecture → learning content
-
-A subject opens a dedicated lecture catalog. Each lecture owns its recording, notes/materials, assignments and attendance section. The header breadcrumb links back through the subject and parent lecture. Written and coding assignments use the canonical address `#/subjects/{subject}/lectures/{lecture}/assignments/{assignment}`; coding screens return to their parent lecture. The assignments overview remains a shortcut into the same hierarchy. Legacy `#/coding/{assignment}` links redirect to the canonical nested URL. Route resolution rejects mismatched subject/lecture/assignment combinations. Searching the lecture list does not change the lecture displayed at the current URL.
-
-
-### Non-local API configuration
-
-Set `APP_ENV=production`, `COOKIE_SECURE=true`, and an HTTPS `PUBLIC_ORIGIN` when deploying behind an HTTPS reverse proxy. Production database connections require PostgreSQL `sslmode=verify-full` and an authenticated TLS Redis URL. Set `TRUSTED_PROXY_CIDRS` to the exact proxy networks that can connect to the Go listener. Configure each trusted proxy to replace untrusted forwarding headers or append the directly observed client IP. Direct clients cannot supply a trusted forwarded IP.
-
-Production disables the demo accounts, demo seeder, and the local macOS grader. Hosting untrusted grading requires an isolated runner with kernel-enforced memory limits.
-
-The staff directory returns up to 25 records per list. Clients can page users, submissions, attendance, and invoices independently using `usersPage`, `submissionsPage`, `attendancePage`, and `feesPage`. Each list reports whether another page exists. Invoices remain administrator-only.
-
-The desktop app ends its previously active bearer session on account switch via `POST /api/v1/session/revoke`. Other sessions on the same account remain active.
-
-The worker reaps superseded and abandoned staged submission attachments after a grace period. To reconcile files from older versions, run the following from the repository root with the same database and asset configuration as the API.
-
-```sh
-(cd backend && go run ./cmd/reconcile-assets)
-```
-
-The default run lists untracked UUID-named submission files older than 24 hours. For a custom deployment, stop the API and worker during a maintenance window, verify the database and storage configuration, then rerun with `-quarantine` to move those files into a private directory within the same asset root. The command leaves files with database metadata alone and preserves quarantined files for recovery.
+It does not include real payment processing, real identity verification, email password recovery, external video hosting, institutional data synchronization, or hardened public code execution.
