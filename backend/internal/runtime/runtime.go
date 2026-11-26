@@ -112,9 +112,9 @@ func (rt *Runtime) Handler() (http.Handler, func(), error) {
 	}
 	return httpadapter.New(httpadapter.Dependencies{
 		Log: rt.Log, PingDB: rt.DB.Ping, Redis: rt.Redis, Sessions: redisadapter.NewSessions(rt.Redis, rt.Config.SessionTTL),
-		Cache: rt.Cache, CookieSecure: rt.Config.CookieSecure, SessionSliding: rt.Config.SessionSliding, SessionTTL: rt.Config.SessionTTL, Web: webFiles(rt.Config.Web),
+		Cache: rt.Cache, CookieSecure: rt.Config.CookieSecure, PublicOrigin: rt.Config.PublicOrigin, TrustedProxies: rt.Config.TrustedProxies, Production: rt.Config.Production, SessionSliding: rt.Config.SessionSliding, SessionTTL: rt.Config.SessionTTL, Web: webFiles(rt.Config.Web),
 		Tx: tx, Users: users, Hasher: hasher, Catalog: cat, Notices: notices, Assignments: assignments, Submissions: subs,
-		Attendance: attendance, Progress: progress, Invoices: invoices, Academic: postgres.NewAcademicRepo(tx), Sync: rt.Sync,
+		Attendance: attendance, Discussions: discussions, Progress: progress, Invoices: invoices, Academic: postgres.NewAcademicRepo(tx), Sync: rt.Sync,
 		AssetMeta: assets, Assets: blob, Bootstrap: bootstrap,
 		Learning: learning.NewService(tx, cat, assignments, subs, progress, discussions, assets, blob, rt.Sync, now, id),
 		Staff:    staff.NewService(tx, cat, cat, schedule, notices, attendance, assignments, subs, users, users, hasher, invoices, rt.Sync, now, id),

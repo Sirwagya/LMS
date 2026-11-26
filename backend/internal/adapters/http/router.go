@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -70,6 +71,9 @@ type Dependencies struct {
 	Sessions       *redisadapter.Sessions
 	Cache          *redisadapter.Cache
 	CookieSecure   bool
+	PublicOrigin   string
+	Production     bool
+	TrustedProxies []netip.Prefix
 	SessionSliding bool
 	SessionTTL     time.Duration
 	Web            http.Handler
@@ -81,21 +85,28 @@ type Dependencies struct {
 	Assignments    Assignments
 	Submissions    assessment.SubmissionRepository
 	Attendance     learning.AttendanceReader
-	Progress       Progress
-	Invoices       Invoices
-	Academic       Academic
-	Sync           Sync
-	AssetMeta      catalog.AssetMetadataRepository
-	Assets         *storage.LocalAssets
-	Bootstrap      *workspace.BootstrapService
-	Learning       *learningapp.Service
-	Staff          *staff.Service
-	Payments       *finance.PayInvoiceService
-	Coding         CodingService
-	Queue          *redisadapter.Queue
+	Discussions    interface {
+		GetByID(context.Context, string) (learning.Discussion, error)
+	}
+	Progress  Progress
+	Invoices  Invoices
+	Academic  Academic
+	Sync      Sync
+	AssetMeta catalog.AssetMetadataRepository
+	Assets    *storage.LocalAssets
+	Bootstrap *workspace.BootstrapService
+	Learning  *learningapp.Service
+	Staff     *staff.Service
+	Payments  *finance.PayInvoiceService
+	Coding    CodingService
+	Queue     *redisadapter.Queue
 }
 
-type api struct{ Dependencies }
+type api struct {
+	Dependencies
+	passwords chan struct{}
+	streams   streamSlots
+}
 type endpoint func(http.ResponseWriter, *http.Request) error
 type access string
 
@@ -114,7 +125,7 @@ type route struct {
 }
 
 func New(d Dependencies) http.Handler {
-	a := &api{d}
+	a := &api{Dependencies: d, passwords: make(chan struct{}, 4)}
 	mux := http.NewServeMux()
 	routes := []route{
 		{"GET", "/health", public, a.health},

@@ -6,6 +6,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"runtime/debug"
 	"strconv"
@@ -41,6 +42,11 @@ func (a *api) requestID(next http.Handler) http.Handler {
 			id = uuid.NewString()
 		}
 		w.Header().Set("X-Request-ID", id)
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+		if a.CookieSecure {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		}
 		ctx := context.WithValue(r.Context(), requestIDKey, id)
 		next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, stateKey, &requestState{})))
 	})
@@ -96,7 +102,7 @@ func (a *api) recovery(next http.Handler) http.Handler {
 func (a *api) transport(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			if origin := r.Header.Get("Origin"); origin != "" && !allowedOrigin(r, origin) {
+			if origin := r.Header.Get("Origin"); origin != "" && !a.allowedOrigin(r, origin) {
 				a.failure(w, r, problem(403, "Invalid request origin."))
 				return
 			}
@@ -109,17 +115,25 @@ func (a *api) transport(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-func allowedOrigin(r *http.Request, origin string) bool {
+func (a *api) allowedOrigin(r *http.Request, origin string) bool {
+	if a.PublicOrigin != "" {
+		return origin == a.PublicOrigin
+	}
+
 	u, err := url.Parse(origin)
 	if err != nil || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return false
 	}
-	if (u.Scheme == "https" || u.Scheme == "http") && strings.EqualFold(u.Host, r.Host) {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	if u.Scheme == scheme && strings.EqualFold(u.Host, r.Host) {
 		return true
 	}
-	switch u.Hostname() {
-	case "localhost", "127.0.0.1", "[::1]", "::1":
-		return u.Scheme == "http"
+	switch origin {
+	case "http://localhost:5173", "http://127.0.0.1:5173", "http://[::1]:5173":
+		return true
 	default:
 		return false
 	}
@@ -189,11 +203,14 @@ func (a *api) rate(path string, next http.Handler) http.Handler {
 		var maximum int
 		switch path {
 		case "/login", "/register":
-			bucket, message, maximum = "auth", "Too many attempts. Try again in a minute.", 30
-			subject, _, _ = net.SplitHostPort(r.RemoteAddr)
-			if subject == "" {
-				subject = r.RemoteAddr
-			}
+			bucket, message, maximum = "auth-ip:"+path, "Too many attempts. Try again in a minute.", 30
+			subject = a.clientIP(r)
+		case "/submissions":
+			bucket, message, maximum = "submissions", "Too many submissions. Try again in a minute.", 10
+			subject = actor(r).UserID
+		case "/password":
+			bucket, message, maximum = "password", "Too many password change attempts.", 5
+			subject = actor(r).UserID
 		case "/coding/evaluate":
 			if actor(r).Role != iam.RoleStudent {
 				next.ServeHTTP(w, r)
@@ -202,14 +219,8 @@ func (a *api) rate(path string, next http.Handler) http.Handler {
 			bucket, subject, message, maximum = "coding", actor(r).UserID, "Run limit reached. Try again in a minute.", 20
 		}
 		if maximum != 0 {
-			retry, err := redisadapter.RateLimit(r.Context(), a.Redis, bucket, subject, maximum)
-			if err != nil {
-				a.failure(w, r, problem(503, "Rate limit service unavailable."))
-				return
-			}
-			if retry > 0 {
-				w.Header().Set("Retry-After", strconv.Itoa(retry))
-				a.failure(w, r, problem(429, message))
+			if err := a.limit(w, r, bucket, subject, message, maximum); err != nil {
+				a.failure(w, r, err)
 				return
 			}
 		}
@@ -229,4 +240,51 @@ func (a *api) idempotency(path string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), mutationKey, key)))
 	})
+}
+
+func (a *api) limit(w http.ResponseWriter, r *http.Request, bucket, subject, message string, maximum int) error {
+	retry, err := redisadapter.RateLimit(r.Context(), a.Redis, bucket, subject, maximum)
+	if err != nil {
+		return problem(503, "Rate limit service unavailable.")
+	}
+	if retry == 0 {
+		return nil
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(retry))
+	return problem(429, message)
+}
+
+func (a *api) clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	peer, err := netip.ParseAddr(host)
+	if err != nil {
+		return host
+	}
+	peer = peer.Unmap()
+	trusted := func(ip netip.Addr) bool {
+		for _, prefix := range a.TrustedProxies {
+			if prefix.Contains(ip) {
+				return true
+			}
+		}
+		return false
+	}
+	if !trusted(peer) {
+		return peer.String()
+	}
+	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
+	for i := len(hops) - 1; i >= 0; i-- {
+		ip, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			return peer.String()
+		}
+		ip = ip.Unmap()
+		if !trusted(ip) || i == 0 {
+			return ip.String()
+		}
+	}
+	return peer.String()
 }

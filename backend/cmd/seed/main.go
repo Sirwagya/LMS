@@ -4,6 +4,8 @@ import (
 	"context"
 	"flag"
 	"log"
+	"net"
+	"path/filepath"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,10 +24,28 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if cfg.Production {
+		log.Fatal("Demo seeding is disabled in production.")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	db, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		log.Fatal("Invalid demo database URL.")
+	}
+	local := func(host string) bool {
+		return filepath.IsAbs(host) || host == "localhost" || net.ParseIP(host).IsLoopback()
+	}
+	if !local(db.ConnConfig.Host) {
+		log.Fatal("Demo seeding requires a local PostgreSQL instance.")
+	}
+	for _, fallback := range db.ConnConfig.Fallbacks {
+		if !local(fallback.Host) {
+			log.Fatal("Demo database fallback must also be local.")
+		}
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, db)
 	if err != nil {
 		log.Fatalf("connect postgres: %v", err)
 	}

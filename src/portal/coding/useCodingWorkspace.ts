@@ -11,6 +11,7 @@ export function useCodingWorkspace(id: string, problem: CodingProblem) {
   const key = (lang: Language) =>
     `vedam-code:${user.id}:${id}:${lang}:${entrypoint}`;
   const loadLocal = (lang: Language) => {
+    if (transport.isDesktop) return problem.starterCode[lang];
     try {
       return localStorage.getItem(key(lang)) ?? problem.starterCode[lang];
     } catch {
@@ -79,7 +80,7 @@ export function useCodingWorkspace(id: string, problem: CodingProblem) {
     dirtyRef.current = true;
     setSource(value);
     try {
-      localStorage.setItem(key(language), value);
+      if (!transport.isDesktop) localStorage.setItem(key(language), value);
     } catch {
       /* Draft remains in memory. */
     }

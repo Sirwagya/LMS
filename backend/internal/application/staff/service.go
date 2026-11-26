@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"vedam/lms/internal/domain/assessment"
 	"vedam/lms/internal/domain/catalog"
@@ -119,7 +120,11 @@ func (s *Service) GradeSubmission(ctx context.Context, actorRole iam.Role, submi
 		return err
 	}
 	if len(feedback) > 5000 {
-		feedback = feedback[:5000]
+		end := 5000
+		for !utf8.RuneStart(feedback[end]) {
+			end--
+		}
+		feedback = feedback[:end]
 	}
 	return s.subRepo.Grade(ctx, submissionID, trimmed, feedback)
 }

@@ -58,7 +58,7 @@ These are intentionally public **local sample accounts**. The student demo has s
 
 Copy `.env.example` to `.env` to customize connection URLs, `HTTP_ADDR`, asset storage and cookie security. Process environment variables take precedence over the file. If the API port changes during Vite development, update the proxy in `vite.config.ts`.
 
-The web app authenticates with an expiring HttpOnly SameSite cookie. Native clients can use the bearer token returned by login. Set `SESSION_SLIDING=true` to renew the session on authenticated requests. New passwords use Argon2id, and successful login upgrades legacy scrypt hashes. Password changes and logout revoke existing sessions. The API enforces role checks, data ownership, upload limits and Redis-backed rate limits.
+The web app authenticates with an expiring HttpOnly SameSite cookie. Browser sign-in sets an HttpOnly cookie. Native clients request bearer authentication on the v1 auth endpoints with `X-LMS-Auth: bearer`. Set `SESSION_SLIDING=true` to renew the session on authenticated requests. New passwords use Argon2id, and successful login upgrades legacy scrypt hashes. Password changes and logout revoke existing sessions. The API enforces role checks, data ownership, upload limits and Redis-backed rate limits.
 
 The Go seed command initializes PostgreSQL from the checked-in fixtures. Existing SQLite files under `.data` are preserved on disk. Moving records created in the former SQLite app into PostgreSQL requires a separate data migration.
 
@@ -85,7 +85,7 @@ Open **Assignments → Solve coding challenge**. The coding workspace includes a
 
 Use `public class Main` in Java, or a normal stdin/stdout program in Python. Java/Python run using the machine's installed runtimes. This local implementation requires **macOS**, `/usr/bin/sandbox-exec`, Python (default `/opt/homebrew/bin/python3`) and a JDK discoverable by `/usr/libexec/java_home`. `LMS_PYTHON` and `JAVA_HOME` override runtime locations. Unsupported hosts fail closed; there is no unrestricted execution fallback.
 
-Each run uses an isolated temporary directory with a clean environment. The OS sandbox blocks networking, private user-file access and child-process creation. CPU/wall-clock, source/input/output, open-file, file-count and concurrent-run limits are enforced; the parent monitors memory and temporary files. Java uses a limited heap. The macOS memory monitor is polling-based, not a hard container memory quota. This is a **local teaching runner**, not a production multi-tenant judge; sandbox-exec is a deprecated macOS interface. Use an isolated container/VM execution provider for public deployment.
+Each run uses an isolated temporary directory with a clean environment. The OS sandbox blocks networking, private user-file access and child-process creation. CPU, wall-clock, source, input, output, and concurrency limits are enforced. Student programs use stdin and stdout and cannot write files. The parent monitors memory, and the trusted Java compilation step has separate file limits. Java uses a limited heap. The macOS memory monitor is polling-based, not a hard container memory quota. This is a **local teaching runner**, not a production multi-tenant judge; sandbox-exec is a deprecated macOS interface. Use an isolated container/VM execution provider for public deployment.
 
 Hidden test inputs, expected answers and output are removed from student API responses. Only staff can configure them. Run checks examples; Submit checks all cases. A custom run displays stdout without an expected-answer verdict. Up to 20 recent submission attempts are shown. Written assignments lock after grading. Coding assignments accept repeated attempts.
 
@@ -100,3 +100,12 @@ The problem pane has dedicated Description / Submissions tabs. The submission pa
 ### Subject → lecture → learning content
 
 A subject opens a dedicated lecture catalog. Each lecture owns its recording, notes/materials, assignments and attendance section. The header breadcrumb links back through the subject and parent lecture. Written and coding assignments use the canonical address `#/subjects/{subject}/lectures/{lecture}/assignments/{assignment}`; coding screens return to their parent lecture. The assignments overview remains a shortcut into the same hierarchy. Legacy `#/coding/{assignment}` links redirect to the canonical nested URL. Route resolution rejects mismatched subject/lecture/assignment combinations. Searching the lecture list does not change the lecture displayed at the current URL.
+
+
+### Non-local API configuration
+
+Set `APP_ENV=production`, `COOKIE_SECURE=true`, and an HTTPS `PUBLIC_ORIGIN` when deploying behind an HTTPS reverse proxy. Production database connections require PostgreSQL `sslmode=verify-full` and an authenticated TLS Redis URL. Set `TRUSTED_PROXY_CIDRS` to the exact proxy networks that can connect to the Go listener. Configure each trusted proxy to replace untrusted forwarding headers or append the directly observed client IP. Direct clients cannot supply a trusted forwarded IP.
+
+Production disables the demo accounts, demo seeder, and the local macOS grader. Hosting untrusted grading requires an isolated runner with kernel-enforced memory limits.
+
+The worker reaps superseded and abandoned staged submission attachments after a grace period. Files left by older versions without a matching database row require a separate storage reconciliation.

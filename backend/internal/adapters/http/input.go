@@ -22,8 +22,12 @@ type fields struct {
 }
 
 func read(w http.ResponseWriter, r *http.Request) *fields {
+	return readBody(w, r, 16<<20)
+}
+
+func readBody(w http.ResponseWriter, r *http.Request, maxBytes int64) *fields {
 	f := &fields{}
-	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<20))
+	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBytes))
 	err := d.Decode(&f.values)
 	if err == nil {
 		var extra any
@@ -37,7 +41,7 @@ func read(w http.ResponseWriter, r *http.Request) *fields {
 	var large *http.MaxBytesError
 	switch {
 	case errors.As(err, &large):
-		f.err = problem(413, "Upload too large. Maximum request size is 16 MB.")
+		f.err = problem(413, "Request body is too large.")
 	case err != nil && err != io.EOF:
 		f.err = invalid("Invalid JSON.")
 	}

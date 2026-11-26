@@ -5,14 +5,49 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	redisadapter "vedam/lms/internal/adapters/redis"
 )
 
+type streamSlots struct {
+	mu    sync.Mutex
+	total int
+	users map[string]int
+}
+
+func (s *streamSlots) acquire(user string) (func(), bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.total >= 128 || s.users[user] >= 4 {
+		return nil, false
+	}
+	if s.users == nil {
+		s.users = make(map[string]int)
+	}
+	s.users[user]++
+	s.total++
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.total--
+		s.users[user]--
+		if s.users[user] == 0 {
+			delete(s.users, user)
+		}
+	}, true
+}
+
 func (a *api) events(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	session := actor(r)
+	release, ok := a.streams.acquire(session.UserID)
+	if !ok {
+		w.Header().Set("Retry-After", "5")
+		return problem(429, "Too many open event streams.")
+	}
+	defer release()
 	sub := a.Redis.Subscribe(ctx, redisadapter.EventChannel(session.UserID), redisadapter.EventChannel(""))
 	defer sub.Close()
 	if _, err := sub.Receive(ctx); err != nil {

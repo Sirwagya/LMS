@@ -250,21 +250,6 @@ export default function Portal() {
               ? "New student? Create account"
               : "Already registered? Sign in"}
           </button>
-          <details className="demo-access">
-            <summary>Local demo accounts</summary>
-            <p>
-              Student: student@vedam.local
-              <br />
-              Teacher: teacher@vedam.local
-              <br />
-              Admin: admin@vedam.local
-              <br />
-              Password for all: <code>VedamLocal123!</code>
-            </p>
-            <p className="muted">
-              Sample academic records. Payments are simulated.
-            </p>
-          </details>
         </section>
       </main>
     );

@@ -5,8 +5,7 @@ use tokio::sync::Semaphore;
 use crate::harness::wrap_solution;
 use crate::model::{CaseResult, GradeRequest, GradeResult, GraderError, Verdict};
 use crate::sandbox::{
-    MacOSRuntimeResolver, MacOSSandboxExecutor, RuntimeResolver, SandboxExecutor,
-    SandboxWorkspace, build_seatbelt_profile,
+    MacOSRuntimeResolver, MacOSSandboxExecutor, RuntimeResolver, SandboxExecutor, SandboxWorkspace,
 };
 use crate::strategy::StrategyRegistry;
 
@@ -50,9 +49,19 @@ impl JudgePipeline {
             .get(request.language)
             .ok_or_else(|| GraderError::Validation("Choose Java or Python.".to_string()))?;
 
-        if request.test_cases.is_empty() {
+        if request.source.is_empty()
+            || request.source.len() > 80_000
+            || !(1..=10).contains(&request.test_cases.len())
+            || request.test_cases.iter().any(|test| {
+                test.input.len() > 40_000
+                    || test
+                        .expected
+                        .as_ref()
+                        .is_some_and(|value| value.len() > 40_000)
+            })
+        {
             return Err(GraderError::Validation(
-                "Add at least one test case before running.".to_string(),
+                "Source or test cases exceed the grading limits.".into(),
             ));
         }
 
@@ -67,13 +76,10 @@ impl JudgePipeline {
             .map_err(|e| GraderError::Unavailable(format!("Create sandbox workspace: {e}")))?;
 
         let wrapped = wrap_solution(request.language, &request.source, request.entrypoint);
-        let profile = build_seatbelt_profile(sandbox.path(), &runtime);
-
-        tokio::try_join!(
-            sandbox.write_file(strategy.source_filename(), &wrapped),
-            sandbox.write_file("profile.sb", &profile)
-        )
-        .map_err(|e| GraderError::Unavailable(format!("Prepare sandbox files: {e}")))?;
+        sandbox
+            .write_file(strategy.source_filename(), &wrapped)
+            .await
+            .map_err(|e| GraderError::Unavailable(format!("Prepare sandbox files: {e}")))?;
 
         let nofile = strategy.rlimit_nofile();
         if let Some(compile_spec) = strategy.compile_command(&runtime) {
@@ -184,8 +190,5 @@ impl JudgePipeline {
 }
 
 fn normalize(value: &str) -> String {
-    value
-        .replace("\r\n", "\n")
-        .trim_end()
-        .to_string()
+    value.replace("\r\n", "\n").trim_end().to_string()
 }

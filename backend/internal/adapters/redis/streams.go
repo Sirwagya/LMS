@@ -117,3 +117,11 @@ func (q *Queue) Drop(ctx context.Context, id string) error {
 	})
 	return err
 }
+
+func (q *Queue) Deliveries(ctx context.Context, id string) (int64, error) {
+	rows, err := q.client.XPendingExt(ctx, &redis.XPendingExtArgs{Stream: gradingStream, Group: graders, Start: id, End: id, Count: 1}).Result()
+	if err != nil || len(rows) == 0 {
+		return 0, err
+	}
+	return rows[0].RetryCount, nil
+}

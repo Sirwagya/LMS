@@ -134,6 +134,15 @@ func (r *DiscussionRepo) ListForLecture(ctx context.Context, lectureID int64) ([
 	return out, rows.Err()
 }
 
+func (r *DiscussionRepo) GetByID(ctx context.Context, id string) (learning.Discussion, error) {
+	var d learning.Discussion
+	err := r.tx.Querier(ctx).QueryRow(ctx, `
+   SELECT d.id,d.user_id,d.lecture_id,u.name,d.body,to_char(d.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),d.created_at
+   FROM discussions d JOIN users u ON u.id=d.user_id WHERE d.id=$1
+ `, id).Scan(&d.ID, &d.UserID, &d.LectureID, &d.AuthorName, &d.Body, &d.Created, &d.CreatedAt)
+	return d, mapPGError(err)
+}
+
 func (r *DiscussionRepo) Create(ctx context.Context, d *learning.Discussion) error {
 	_, err := r.tx.Querier(ctx).Exec(ctx, `
 		INSERT INTO discussions (id, user_id, lecture_id, body, created_at)
@@ -647,8 +656,8 @@ func (r *SyncRepo) ClaimUnpublished(ctx context.Context, limit int) ([]syncdomai
 	}
 	rows, err := r.tx.Querier(ctx).Query(ctx, `
 		SELECT id, aggregate_id, topic, payload, created_at
-		FROM outbox_events WHERE published_at IS NULL
-		ORDER BY created_at ASC, id ASC LIMIT $1 FOR UPDATE SKIP LOCKED
+		FROM outbox_events WHERE published_at IS NULL AND relay_failed_at IS NULL AND next_relay_at <= NOW()
+        ORDER BY next_relay_at, created_at, id LIMIT $1 FOR UPDATE SKIP LOCKED
 	`, limit)
 	if err != nil {
 		return nil, mapPGError(err)
@@ -748,4 +757,14 @@ func (r *CodingAttemptRepo) Result(ctx context.Context, userID, id string) (json
 	var result json.RawMessage
 	err := r.tx.Querier(ctx).QueryRow(ctx, `SELECT result_json FROM coding_attempts WHERE id=$1 AND user_id=$2`, id, userID).Scan(&result)
 	return result, mapPGError(err)
+}
+
+func (r *SyncRepo) DeferRelay(ctx context.Context, id, reason string, permanent bool) error {
+	_, err := r.tx.Querier(ctx).Exec(ctx, `
+   UPDATE outbox_events SET relay_attempts=relay_attempts+1, relay_error=$2,
+     relay_failed_at=CASE WHEN $3::boolean THEN NOW() ELSE NULL END,
+     next_relay_at=NOW()+make_interval(secs => (1 << LEAST(relay_attempts,8)))
+   WHERE id=$1
+ `, id, reason, permanent)
+	return mapPGError(err)
 }

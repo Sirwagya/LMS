@@ -20,7 +20,7 @@ pub struct StoredSession {
 pub trait SessionVault: Send + Sync + 'static {
     fn save(&self, session: &StoredSession) -> Result<(), String>;
     fn load(&self) -> Option<StoredSession>;
-    fn clear(&self);
+    fn clear(&self) -> Result<(), String>;
 }
 
 /// macOS Keychain-backed credential store using Security.framework.
@@ -53,31 +53,29 @@ impl MacOSKeychainVault {
 
 impl SessionVault for MacOSKeychainVault {
     fn save(&self, session: &StoredSession) -> Result<(), String> {
+        let mut cache = self.cache.lock().map_err(|_| "vault lock poisoned")?;
         let encoded = serde_json::to_vec(session).map_err(|e| e.to_string())?;
         set_generic_password(&self.service, &self.account, &encoded).map_err(|e| e.to_string())?;
-        if let Ok(mut guard) = self.cache.lock() {
-            *guard = Some(Some(session.clone()));
-        }
+        *cache = Some(Some(session.clone()));
         Ok(())
     }
 
     fn load(&self) -> Option<StoredSession> {
-        if let Ok(guard) = self.cache.lock()
-            && let Some(cached) = guard.as_ref()
-        {
-            return cached.clone();
+        let mut cache = self.cache.lock().ok()?;
+        if cache.is_none() {
+            *cache = Some(self.read_from_keychain());
         }
-        let loaded = self.read_from_keychain();
-        if let Ok(mut guard) = self.cache.lock() {
-            *guard = Some(loaded.clone());
-        }
-        loaded
+        cache.as_ref().cloned().flatten()
     }
 
-    fn clear(&self) {
-        let _ = delete_generic_password(&self.service, &self.account);
-        if let Ok(mut guard) = self.cache.lock() {
-            *guard = Some(None);
+    fn clear(&self) -> Result<(), String> {
+        const ERR_ITEM_NOT_FOUND: i32 = -25300;
+        let mut cache = self.cache.lock().map_err(|_| "vault lock poisoned")?;
+        *cache = Some(None);
+        match delete_generic_password(&self.service, &self.account) {
+            Ok(()) => Ok(()),
+            Err(err) if err.code() == ERR_ITEM_NOT_FOUND => Ok(()),
+            Err(err) => Err(format!("Could not delete the session from Keychain: {err}")),
         }
     }
 }
@@ -99,10 +97,9 @@ impl SessionVault for MemorySessionVault {
         self.inner.lock().ok().and_then(|g| g.clone())
     }
 
-    fn clear(&self) {
-        if let Ok(mut guard) = self.inner.lock() {
-            *guard = None;
-        }
+    fn clear(&self) -> Result<(), String> {
+        *self.inner.lock().map_err(|_| "vault lock poisoned")? = None;
+        Ok(())
     }
 }
 
@@ -136,7 +133,7 @@ mod tests {
         };
         vault.save(&session).unwrap();
         assert_eq!(vault.load(), Some(session));
-        vault.clear();
+        vault.clear().unwrap();
         assert_eq!(vault.load(), None);
     }
 
@@ -154,7 +151,7 @@ mod tests {
                 // Re-read using a fresh instance without in-memory cache.
                 let fresh = MacOSKeychainVault::new(&vault.service, &vault.account);
                 assert_eq!(fresh.load(), Some(session));
-                fresh.clear();
+                fresh.clear().unwrap();
                 let after_clear = MacOSKeychainVault::new(&vault.service, &vault.account);
                 assert_eq!(after_clear.load(), None);
             }

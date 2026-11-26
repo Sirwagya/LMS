@@ -74,8 +74,22 @@ func (a *api) submit(w http.ResponseWriter, r *http.Request) error {
 	if f.err != nil {
 		return f.err
 	}
+	if len(in.FileBytes) > 0 {
+		previous, err := a.Submissions.GetByUserAndAssignment(r.Context(), session.UserID, id)
+		if err != nil && !errors.Is(err, errs.ErrNotFound) {
+			return err
+		}
+		if previous != nil && previous.Score != nil && *previous.Score != "" {
+			return errs.New(errs.ErrAlreadyGraded, "ALREADY_GRADED", "Graded submissions cannot be changed.")
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := a.Learning.StageWrittenAttachment(ctx, &in); err != nil {
+		return err
+	}
 	var subID string
-	err = a.mutate(r.Context(), session.UserID, func(ctx context.Context) error {
+	err = a.mutate(ctx, session.UserID, func(ctx context.Context) error {
 		if err := a.Learning.SubmitWrittenAssignment(ctx, in); err != nil {
 			return err
 		}
@@ -146,16 +160,11 @@ func (a *api) addDiscussion(ctx context.Context, user string, lectureID int64, b
 	if err != nil {
 		return learning.Discussion{}, err
 	}
-	list, err := a.Learning.ListDiscussions(ctx, lectureID)
+	d, err := a.Discussions.GetByID(ctx, id)
 	if err != nil {
 		return learning.Discussion{}, err
 	}
-	for _, d := range list {
-		if d.ID == id {
-			return d, a.changed(ctx, "", "discussion", id, "sync.available", d)
-		}
-	}
-	return learning.Discussion{}, errs.ErrNotFound
+	return d, a.changed(ctx, "", "discussion", id, "sync.available", d)
 }
 
 var unsafeFilename = regexp.MustCompile(`[^a-zA-Z0-9._ -]`)

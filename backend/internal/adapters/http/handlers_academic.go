@@ -119,6 +119,9 @@ func (a *api) classSessions(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	for i := range list {
+		list[i].CPRID = nil
+	}
 	academicJSON(w, envelope.NewPage(list, page, size, total))
 	return nil
 }

@@ -2,6 +2,8 @@ package finance
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 
@@ -53,11 +55,22 @@ func (s *PayInvoiceService) Pay(ctx context.Context, userID, role, feeID, idempo
 		return errs.New(errs.ErrNotFound, "INVOICE_NOT_FOUND", "Invoice not found.")
 	}
 
+	if idempotencyKey != "" {
+		encoded, _ := json.Marshal([2]string{userID, idempotencyKey})
+		digest := sha256.Sum256(encoded)
+		idempotencyKey = "payment:" + hex.EncodeToString(digest[:])
+	}
 	return s.tx.WithinTx(ctx, func(txCtx context.Context) error {
 		if idempotencyKey != "" && s.idem != nil {
-			if _, found, err := s.idem.LookupMutation(txCtx, idempotencyKey); err != nil {
+			if result, found, err := s.idem.LookupMutation(txCtx, idempotencyKey); err != nil {
 				return err
 			} else if found {
+				var paid struct {
+					FeeID string `json:"feeId"`
+				}
+				if json.Unmarshal(result, &paid) != nil || paid.FeeID != feeID {
+					return errs.New(errs.ErrConflict, "PAYMENT_KEY_REUSED", "Payment key already used for another invoice.")
+				}
 				return nil
 			}
 		}
@@ -116,7 +129,8 @@ func (s *PayInvoiceService) Pay(ctx context.Context, userID, role, feeID, idempo
 		}
 
 		if idempotencyKey != "" && s.idem != nil {
-			if err := s.idem.SaveMutation(txCtx, idempotencyKey, userID, json.RawMessage(`{"ok":true}`)); err != nil {
+			response, _ := json.Marshal(map[string]string{"feeId": feeID})
+			if err := s.idem.SaveMutation(txCtx, idempotencyKey, userID, response); err != nil {
 				return err
 			}
 		}

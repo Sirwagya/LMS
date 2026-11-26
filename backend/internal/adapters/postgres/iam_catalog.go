@@ -473,3 +473,42 @@ func (r *UserRepo) UpdatePasswordIfCurrent(ctx context.Context, userID, current,
 	}
 	return true, r.UpdatePasswordHash(ctx, userID, replacement)
 }
+
+// Reap only abandoned staging rows or superseded submission attachments.
+func (r *AssetMetaRepo) ReapSubmissionAssets(ctx context.Context, remove func(string) error) error {
+	return r.tx.WithinTx(ctx, func(ctx context.Context) error {
+		q := r.tx.Querier(ctx)
+		rows, err := q.Query(ctx, `
+     SELECT id,storage_key FROM assets a
+     WHERE storage_key LIKE 'submissions/%' AND created_at < NOW()-interval '15 minutes'
+       AND NOT EXISTS (SELECT 1 FROM submissions s WHERE s.asset_id=a.id)
+     ORDER BY created_at,id LIMIT 50 FOR UPDATE OF a SKIP LOCKED
+   `)
+		if err != nil {
+			return err
+		}
+		type item struct{ id, key string }
+		var batch []item
+		for rows.Next() {
+			var v item
+			if err := rows.Scan(&v.id, &v.key); err != nil {
+				rows.Close()
+				return err
+			}
+			batch = append(batch, v)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, v := range batch {
+			if err := remove(v.key); err != nil {
+				return err
+			}
+			if _, err := q.Exec(ctx, `DELETE FROM assets WHERE id=$1`, v.id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}

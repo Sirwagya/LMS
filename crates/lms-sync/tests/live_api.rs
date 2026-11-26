@@ -10,6 +10,7 @@ async fn offline_edits_reconnect_to_go_api() {
     let client = reqwest::Client::new();
     let auth: Value = client
         .post(format!("{base}/api/v1/register"))
+        .header("X-LMS-Auth", "bearer")
         .json(&json!({
             "name":"Phase Four", "password":"LocalSyncTestPassword123!",
             "email":format!("sync-{}@vedam.local", uuid::Uuid::now_v7())

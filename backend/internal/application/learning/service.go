@@ -82,9 +82,10 @@ func (s *Service) SetProgress(ctx context.Context, userID string, lectureID int6
 			}
 		}
 		payload, _ := json.Marshal(map[string]any{
-			"userId":    userID,
-			"lectureId": lectureID,
-			"complete":  complete,
+			"userId":          userID,
+			"lectureId":       lectureID,
+			"complete":        complete,
+			"clientTimestamp": clientTime.UnixMilli(),
 		})
 		target := userID
 		if _, err := s.outbox.AppendChangelog(txCtx, "user:"+userID, &target, "lecture_progress", strconv.FormatInt(lectureID, 10), "upsert", payload); err != nil {
@@ -101,6 +102,7 @@ func (s *Service) SetProgress(ctx context.Context, userID string, lectureID int6
 }
 
 type SubmitWrittenInput struct {
+	assetID      *string
 	UserID       string
 	Role         string
 	AssignmentID string
@@ -125,9 +127,6 @@ func (s *Service) SubmitWrittenAssignment(ctx context.Context, in SubmitWrittenI
 	if answer == "" || len(answer) > 20000 {
 		return errs.New(errs.ErrValidation, "INVALID_ANSWER", "Submission answer must be between 1 and 20000 characters.")
 	}
-	if len(in.FileBytes) > MaxAttachmentBytes {
-		return errs.New(errs.ErrValidation, "FILE_TOO_LARGE", "Maximum attachment size is 10 MB.")
-	}
 
 	return s.tx.WithinTx(ctx, func(txCtx context.Context) error {
 		existing, err := s.subRepo.GetByUserAndAssignment(txCtx, in.UserID, a.ID)
@@ -136,36 +135,6 @@ func (s *Service) SubmitWrittenAssignment(ctx context.Context, in SubmitWrittenI
 		}
 		if existing != nil && existing.Score != nil && *existing.Score != "" {
 			return errs.New(errs.ErrAlreadyGraded, "ALREADY_GRADED", "Graded submissions cannot be changed.")
-		}
-
-		var assetID *string
-		filename := strings.TrimSpace(in.Filename)
-		if len(in.FileBytes) > 0 {
-			if filename == "" || len(filename) > 200 {
-				return errs.New(errs.ErrValidation, "INVALID_FILENAME", "Provide a valid attachment filename.")
-			}
-			id := s.newID()
-			storageKey := "submissions/" + id
-			digest := sha256.Sum256(in.FileBytes)
-			if err := s.assetBlob.Put(txCtx, storageKey, in.FileBytes); err != nil {
-				return err
-			}
-			mime := in.MimeType
-			if mime == "" {
-				mime = "application/octet-stream"
-			}
-			if err := s.assetMeta.Create(txCtx, &catalog.Asset{
-				ID:         id,
-				Filename:   filename,
-				MimeType:   mime,
-				ByteSize:   int64(len(in.FileBytes)),
-				StorageKey: storageKey,
-				SHA256:     hex.EncodeToString(digest[:]),
-				CreatedAt:  s.clk.Now().UTC(),
-			}); err != nil {
-				return err
-			}
-			assetID = &id
 		}
 
 		subID := s.newID()
@@ -178,11 +147,42 @@ func (s *Service) SubmitWrittenAssignment(ctx context.Context, in SubmitWrittenI
 			AssignmentID: a.ID,
 			Course:       a.CourseCode,
 			Answer:       answer,
-			Filename:     filename,
-			AssetID:      assetID,
+			Filename:     in.Filename,
+			AssetID:      in.assetID,
 			Created:      s.clk.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		})
 	})
+}
+
+// Stage the metadata before writing a blob so abandoned uploads remain discoverable.
+func (s *Service) StageWrittenAttachment(ctx context.Context, in *SubmitWrittenInput) error {
+	if len(in.FileBytes) == 0 {
+		return nil
+	}
+	if len(in.FileBytes) > MaxAttachmentBytes {
+		return errs.New(errs.ErrValidation, "FILE_TOO_LARGE", "Maximum attachment size is 10 MB.")
+	}
+	filename := strings.TrimSpace(in.Filename)
+	if filename == "" || len(filename) > 800 {
+		return errs.New(errs.ErrValidation, "INVALID_FILENAME", "Provide a valid attachment filename.")
+	}
+	id := s.newID()
+	key := "submissions/" + id
+	digest := sha256.Sum256(in.FileBytes)
+	mime := in.MimeType
+	if mime == "" {
+		mime = "application/octet-stream"
+	}
+	if err := s.assetMeta.Create(ctx, &catalog.Asset{ID: id, Filename: filename, MimeType: mime, ByteSize: int64(len(in.FileBytes)), StorageKey: key, SHA256: hex.EncodeToString(digest[:]), CreatedAt: s.clk.Now().UTC()}); err != nil {
+		return err
+	}
+	if err := s.assetBlob.Put(ctx, key, in.FileBytes); err != nil {
+		return err
+	}
+	in.assetID = &id
+	in.Filename = filename
+	in.FileBytes = nil
+	return nil
 }
 
 func (s *Service) ListDiscussions(ctx context.Context, lectureID int64) ([]domain.Discussion, error) {

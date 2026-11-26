@@ -29,7 +29,11 @@ func (a *api) staffWorkspace(w http.ResponseWriter, r *http.Request) error {
 	}
 	public := make([]iam.PublicUser, 0, len(users))
 	for _, u := range users {
-		public = append(public, u.Public())
+		if actor(r).Role == iam.RoleAdmin || u.Role == iam.RoleStudent {
+			data := u.Public()
+			data.Profile = nil
+			public = append(public, data)
+		}
 	}
 	subs, err := a.Submissions.ListAll(ctx)
 	if err != nil {
@@ -39,15 +43,18 @@ func (a *api) staffWorkspace(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	fees, err := a.Invoices.ListAll(ctx)
-	if err != nil {
-		return err
+	var fees []finance.FeeInvoice
+	if actor(r).Role == iam.RoleAdmin {
+		fees, err = a.Invoices.ListAll(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	writeJSON(w, 200, map[string]any{"users": public, "submissions": items(subs), "attendance": items(attendance), "fees": items(fees)})
 	return nil
 }
 func (a *api) createUser(w http.ResponseWriter, r *http.Request) error {
-	f := read(w, r)
+	f := readBody(w, r, 4096)
 	name, email, password := f.text("name", "name", 100), strings.ToLower(f.text("email", "email", 254)), f.text("password", "password", 128)
 	role := iam.Role(f.optional("role"))
 	if f.err != nil {
@@ -56,7 +63,12 @@ func (a *api) createUser(w http.ResponseWriter, r *http.Request) error {
 	if (role != iam.RoleStudent && role != iam.RoleTeacher) || !emailPattern.MatchString(email) || textLength(password) < 10 {
 		return invalid("Valid email, role and a 10-character password required.")
 	}
-	_, err := a.newUser(r.Context(), name, email, password, role)
+	release, err := a.passwordSlot(w)
+	if err != nil {
+		return err
+	}
+	defer release()
+	_, err = a.newUser(r.Context(), name, email, password, role)
 	return ok(w, 201, err)
 }
 func (a *api) createInvoice(w http.ResponseWriter, r *http.Request) error {

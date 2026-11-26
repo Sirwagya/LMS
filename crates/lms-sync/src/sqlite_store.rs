@@ -136,7 +136,7 @@ impl SqliteStore {
         if profile
             .get("name")
             .and_then(Value::as_str)
-            .is_none_or(|name| name.trim().is_empty())
+            .is_none_or(|name| name.trim().is_empty() || name.encode_utf16().count() > 100)
         {
             return Err(invalid("profile requires a name"));
         }
@@ -583,9 +583,13 @@ impl LocalStorePort for SqliteStore {
             {
                 return Err(invalid("invalid changelog sequence or operation"));
             }
-            if entry.scope != "global"
-                && entry.scope.strip_prefix("user:") != Some(self.account_id.as_str())
-            {
+            let scoped_to_account =
+                entry.scope.strip_prefix("user:") == Some(self.account_id.as_str());
+            let private = matches!(
+                entry.entity_type.as_str(),
+                "profile" | "lecture_progress" | "submission" | "fee_invoice" | "attendance"
+            );
+            if !scoped_to_account && (private || entry.scope != "global") {
                 return Err(SyncError::AccountMismatch);
             }
             previous = entry.seq;
@@ -715,6 +719,7 @@ fn update_progress(
     complete: bool,
     version: Option<i64>,
 ) -> Result<(), SyncError> {
+    // Go ProgressRepo.Version returns the same changelog seq used by pull.
     let key = format!("progress:{lecture}");
     if let Some(version) = version {
         if meta_number(db, &key)?.is_some_and(|current| current > version) {

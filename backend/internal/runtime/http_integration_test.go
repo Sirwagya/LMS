@@ -209,7 +209,20 @@ func loginAs(t *testing.T, api liveAPI, role string) identity {
 	if _, err := uuid.Parse(res.header.Get("X-Request-ID")); err != nil {
 		t.Fatal(err)
 	}
-	return decode[identity](t, res)
+	account := decode[identity](t, res)
+	if account.Token != "" {
+		t.Fatal("browser auth returned a bearer token")
+	}
+	response := http.Response{Header: res.header}
+	for _, cookie := range response.Cookies() {
+		if cookie.Name == "lms_session" {
+			account.Token = cookie.Value
+		}
+	}
+	if account.Token == "" {
+		t.Fatal("missing browser session cookie")
+	}
+	return account
 }
 
 func TestHTTPRedisPostgresParity(t *testing.T) {
@@ -467,7 +480,14 @@ func TestWorkerSSEAndGradingQueue(t *testing.T) {
 	path := queued.Header.Get("Location")
 	requireStatus(t, api, 401, "GET", path, "", "", nil)
 	requireStatus(t, api, 403, "GET", path, teacher.Token, "", nil)
-	registered := decode[identity](t, requireStatus(t, api, 200, "POST", "/api/register", "", "", map[string]string{"name": "Another Student", "email": "another@vedam.local", "password": "AnotherPassword123!"}))
+	registeredReply := requireStatus(t, api, 200, "POST", "/api/register", "", "", map[string]string{"name": "Another Student", "email": "another@vedam.local", "password": "AnotherPassword123!"})
+	registered := decode[identity](t, registeredReply)
+	registeredResponse := http.Response{Header: registeredReply.header}
+	for _, cookie := range registeredResponse.Cookies() {
+		if cookie.Name == "lms_session" {
+			registered.Token = cookie.Value
+		}
+	}
 	requireStatus(t, api, 404, "GET", path, registered.Token, "", nil)
 	if err := api.Queue.Initialize(ctx); err != nil {
 		t.Fatal(err)
@@ -489,5 +509,28 @@ func TestWorkerSSEAndGradingQueue(t *testing.T) {
 	history := decode[[]json.RawMessage](t, requireStatus(t, api, 200, "GET", "/api/coding/history?assignmentId=coding-two-sum", student.Token, "", nil))
 	if len(history) != 1 {
 		t.Fatalf("grading retry wrote %d attempts", len(history))
+	}
+}
+
+func TestOutboxQuarantinesMalformedRowAndDeliversNext(t *testing.T) {
+	api := startAPI(t)
+	ctx := t.Context()
+	_, err := api.DB.Exec(ctx, `
+		INSERT INTO outbox_events(id, aggregate_id, topic, payload, created_at)
+		VALUES ('malformed', 'test', 'sync.available', '{"userId":42}', NOW() - interval '1 second'),
+		       ('valid', 'test', 'sync.available', '{"userId":""}', NOW())`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivered, err := api.RelayOutbox(ctx)
+	if err != nil || delivered != 1 {
+		t.Fatalf("expected one delivered event, got %d: %v", delivered, err)
+	}
+	var quarantined, published bool
+	err = api.DB.QueryRow(ctx, `SELECT
+		(SELECT relay_failed_at IS NOT NULL FROM outbox_events WHERE id='malformed'),
+		(SELECT published_at IS NOT NULL FROM outbox_events WHERE id='valid')`).Scan(&quarantined, &published)
+	if err != nil || !quarantined || !published {
+		t.Fatalf("quarantined=%t published=%t err=%v", quarantined, published, err)
 	}
 }
