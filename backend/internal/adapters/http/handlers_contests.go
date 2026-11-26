@@ -27,6 +27,7 @@ func (a *api) contestStatus(w http.ResponseWriter, r *http.Request) error {
 		"enabled":          a.Contests != nil,
 		"attemptsEnabled":  a.ContestAttempts != nil,
 		"integrityEnabled": a.ContestIntegrity != nil,
+		"resultsEnabled":   a.ContestResults != nil,
 	})
 	return nil
 }

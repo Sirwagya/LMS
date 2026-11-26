@@ -114,6 +114,7 @@ type Dependencies struct {
 	ContestRepo      contest.Repository
 	ContestAttempts  contest.AttemptRepository
 	ContestIntegrity contest.IntegrityRepository
+	ContestResults   contest.ResultsRepository
 }
 
 type api struct {
@@ -218,6 +219,18 @@ func New(d Dependencies) http.Handler {
 				{"POST", "/staff/contests/{id}/attempts/{attemptId}/review", staffOnly, a.contestDecideReview},
 				{"POST", "/staff/contests/{id}/appeals/{appealId}/resolve", staffOnly, a.contestResolveAppeal},
 				{"POST", "/staff/contests/{id}/similarity", staffOnly, a.contestComputeSimilarity},
+			} {
+				a.mount(mux, prefix, rt)
+			}
+		}
+		if d.ContestResults != nil {
+			for _, rt := range []route{
+				{"GET", "/contests/results", student, a.contestStudentResultsSummary},
+				{"PUT", "/contests/{id}/alias", student, a.contestSetAlias},
+				{"GET", "/contests/{id}/report", student, a.contestStudentReport},
+				{"GET", "/contests/{id}/leaderboard", authenticated, a.contestLeaderboard},
+				{"GET", "/staff/contests/{id}/results", staffOnly, a.contestStaffResults},
+				{"POST", "/staff/contests/{id}/results/publish", staffOnly, a.contestPublishResults},
 			} {
 				a.mount(mux, prefix, rt)
 			}
