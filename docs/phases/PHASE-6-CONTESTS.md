@@ -6,6 +6,10 @@ Teachers create timed contests with MCQs and coding problems. Students take scor
 
 Replay records activity inside the contest, including code changes. Screen, webcam, microphone, clipboard contents, global keystrokes, and unrelated app activity stay outside collection.
 
+## Authoring preview
+
+Set `LMS_CONTEST_AUTHORING=true` for the local API to enable **Staff → Contests** and the student dashboard's contest schedule. The current slice supports drafting, preview, publishing, cancellation, and cohort visibility. Start, grading, replay, reports, and rankings follow on their own branches.
+
 ## Teacher workflow
 
 1. In **Staff → Contests**, create a draft with a title, audience, instructions, opening time, closing time, attempt duration, and allowed resources. Show the timezone and preview exactly what students will see.

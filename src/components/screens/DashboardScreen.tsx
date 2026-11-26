@@ -1,3 +1,4 @@
+import { StudentContests } from "../../portal/contests/StudentContests";
 import { useState } from "react";
 import {
   ArrowUpRight,
@@ -280,6 +281,7 @@ export function DashboardScreen() {
           </EmptyState>
         )}
       </div>
+      {!archived && <StudentContests />}
       <div>
         <SectionHeader
           title="Notice board"

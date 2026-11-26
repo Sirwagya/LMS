@@ -1,3 +1,5 @@
+import { ContestAuthoring } from "./contests/ContestAuthoring";
+import { useContestsEnabled } from "./contests/useContestsEnabled";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { lecturesBySubject, drawerNotices } from "../data/lmsData";
 import { api } from "./api";
@@ -19,6 +21,7 @@ import { FeesSection } from "./staff/FeesSection";
 import { PeopleSection } from "./staff/PeopleSection";
 export function StaffPortal() {
   const { user, logout, refresh } = useSession();
+  const contestsEnabled = useContestsEnabled();
   const [tab, setTab] = useState("Overview"),
     [data, setData] = useState<StaffData | null>(null),
     [error, setError] = useState("");
@@ -97,6 +100,7 @@ export function StaffPortal() {
     "Courses",
     "Lectures",
     "Assignments",
+    ...(contestsEnabled ? ["Contests"] : []),
     "Submissions",
     "Discussions",
     "Attendance",
@@ -163,7 +167,7 @@ export function StaffPortal() {
           </button>
         </div>
         {error && <p role="alert">{error}</p>}
-        {!data ? (
+        {tab === "Contests" ? <ContestAuthoring /> : !data ? (
           <p role="status">Loading records…</p>
         ) : (
           <div className="screen staff-content">
