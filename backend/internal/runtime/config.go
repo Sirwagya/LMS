@@ -18,13 +18,14 @@ import (
 const defaultDBURL = "postgres://lms:lms_local_dev@127.0.0.1:5432/lms_dev?sslmode=disable"
 
 type Config struct {
-	Addr, DatabaseURL, RedisURL, Assets, Web, Grader string
-	CookieSecure, SessionSliding                     bool
-	SessionTTL                                       time.Duration
-	Production                                       bool
-	ContestAuthoring, ContestAttempts                bool
-	PublicOrigin                                     string
-	TrustedProxies                                   []netip.Prefix
+	Addr, DatabaseURL, RedisURL, Assets, Web, Grader  string
+	CookieSecure, SessionSliding                      bool
+	SessionTTL                                        time.Duration
+	Production                                        bool
+	ContestAuthoring, ContestAttempts, ContestGrading bool
+	ContestJudgeURL, ContestJudgeToken                string
+	PublicOrigin                                      string
+	TrustedProxies                                    []netip.Prefix
 }
 
 func LoadConfig() (Config, error) {
@@ -125,6 +126,16 @@ func LoadConfig() (Config, error) {
 	if err != nil || (attempts && !contestAuthoring) {
 		return Config{}, fmt.Errorf("LMS_CONTEST_ATTEMPTS must be a boolean and requires LMS_CONTEST_AUTHORING=true when enabled")
 	}
+	grading, err := strconv.ParseBool(get("LMS_CONTEST_GRADING", "false"))
+	if err != nil || (grading && !attempts) {
+		return Config{}, fmt.Errorf("LMS_CONTEST_GRADING must be a boolean and requires LMS_CONTEST_ATTEMPTS=true when enabled")
+	}
+	judgeURL, judgeToken := get("LMS_CONTEST_JUDGE_URL", ""), get("LMS_CONTEST_JUDGE_TOKEN", "")
+	if grading || judgeURL != "" || judgeToken != "" {
+		if err := validateContestJudge(judgeURL, judgeToken, production); err != nil {
+			return Config{}, err
+		}
+	}
 	graderPath := path("GRADER_BINARY_PATH", "target/release/lms-grader")
 	if os.Getenv("GRADER_BINARY_PATH") == "" {
 		if _, err := os.Stat(graderPath); err != nil {
@@ -138,11 +149,27 @@ func LoadConfig() (Config, error) {
 		graderPath = ""
 	}
 	return Config{
-		Addr: addr, DatabaseURL: databaseURL, RedisURL: redisURL, Production: production, ContestAuthoring: contestAuthoring, ContestAttempts: attempts, PublicOrigin: publicOrigin, TrustedProxies: proxies,
+		Addr: addr, DatabaseURL: databaseURL, RedisURL: redisURL, Production: production, ContestAuthoring: contestAuthoring, ContestAttempts: attempts, ContestGrading: grading,
+		ContestJudgeURL: judgeURL, ContestJudgeToken: judgeToken, PublicOrigin: publicOrigin, TrustedProxies: proxies,
 		Assets: path("ASSET_STORAGE_DIR", "backend/.data/assets"), Web: path("WEB_DIST_DIR", "dist"),
 		Grader: graderPath, CookieSecure: secure, SessionSliding: sliding, SessionTTL: time.Duration(hours) * time.Hour,
 	}, nil
 }
+func validateContestJudge(endpoint, token string, production bool) error {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return fmt.Errorf("LMS_CONTEST_JUDGE_URL must be a dedicated HTTPS judge endpoint")
+	}
+	ip := net.ParseIP(u.Hostname())
+	if u.Scheme != "https" && (production || u.Scheme != "http" || ip == nil || !ip.IsLoopback()) {
+		return fmt.Errorf("LMS_CONTEST_JUDGE_URL requires HTTPS outside loopback development")
+	}
+	if len(token) < 32 || strings.ContainsAny(token, " \t\r\n") {
+		return fmt.Errorf("LMS_CONTEST_JUDGE_TOKEN must be a dedicated bearer secret of at least 32 characters")
+	}
+	return nil
+}
+
 func readEnv(path string) (map[string]string, error) {
 	values := map[string]string{}
 	f, err := os.Open(path)

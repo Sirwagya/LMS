@@ -51,6 +51,14 @@ func startAPI(t *testing.T) liveAPI {
 
 func startAPIWithContests(t *testing.T, contestAuthoring bool, enableAttempts ...bool) liveAPI {
 	t.Helper()
+	return startConfiguredAPI(t, func(cfg *Config) {
+		cfg.ContestAuthoring = contestAuthoring
+		cfg.ContestAttempts = len(enableAttempts) > 0 && enableAttempts[0]
+	})
+}
+
+func startConfiguredAPI(t *testing.T, configure func(*Config)) liveAPI {
+	t.Helper()
 	root, err := filepath.Abs("../../..")
 	if err != nil {
 		t.Fatal(err)
@@ -110,8 +118,8 @@ func startAPIWithContests(t *testing.T, contestAuthoring bool, enableAttempts ..
 	query.Set("search_path", schema+",public")
 	db.RawQuery = query.Encode()
 	cfg := Config{DatabaseURL: db.String(), RedisURL: "unix://" + socket, Assets: filepath.Join(data, "assets"), Web: filepath.Join(root, "dist"),
-		SessionTTL: 24 * time.Hour, ContestAuthoring: contestAuthoring,
-		ContestAttempts: len(enableAttempts) > 0 && enableAttempts[0]}
+		SessionTTL: 24 * time.Hour}
+	configure(&cfg)
 	rt, err := Open(ctx, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)

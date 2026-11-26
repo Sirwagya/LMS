@@ -40,6 +40,12 @@ func (rt *Runtime) Work(ctx context.Context) {
 	wg.Go(func() { rt.reapSubmissionAssets(ctx) })
 	if rt.Config.ContestAttempts {
 		wg.Go(func() { rt.expireContestAttempts(ctx) })
+		wg.Go(func() { rt.scoreContests(ctx) })
+		if rt.contestJudge != nil {
+			for range 2 {
+				wg.Go(func() { rt.judgeContests(ctx) })
+			}
+		}
 	}
 	wg.Wait()
 }

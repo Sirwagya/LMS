@@ -25,6 +25,7 @@ type AttemptCommand struct {
 	Lease    int64
 	Revision int64
 	Answers  map[int]Answer
+	Coding   CodingCommand
 }
 
 type Example struct {
@@ -42,18 +43,22 @@ type StudentQuestion struct {
 
 type AttemptView struct {
 	Summary
-	Instructions string            `json:"instructions"`
-	State        string            `json:"state"`
-	ServerTime   time.Time         `json:"serverTime"`
-	AttemptID    string            `json:"attemptId,omitempty"`
-	StartedAt    *time.Time        `json:"startedAt,omitempty"`
-	DeadlineAt   *time.Time        `json:"deadlineAt,omitempty"`
-	SubmittedAt  *time.Time        `json:"submittedAt,omitempty"`
-	FinishReason string            `json:"finishReason,omitempty"`
-	Lease        int64             `json:"lease"`
-	Revision     int64             `json:"revision"`
-	Answers      map[int]Answer    `json:"answers"`
-	Questions    []StudentQuestion `json:"questions,omitempty"`
+	Instructions       string             `json:"instructions"`
+	State              string             `json:"state"`
+	ServerTime         time.Time          `json:"serverTime"`
+	AttemptID          string             `json:"attemptId,omitempty"`
+	StartedAt          *time.Time         `json:"startedAt,omitempty"`
+	DeadlineAt         *time.Time         `json:"deadlineAt,omitempty"`
+	SubmittedAt        *time.Time         `json:"submittedAt,omitempty"`
+	FinishReason       string             `json:"finishReason,omitempty"`
+	Lease              int64              `json:"lease"`
+	Revision           int64              `json:"revision"`
+	Answers            map[int]Answer     `json:"answers"`
+	Questions          []StudentQuestion  `json:"questions,omitempty"`
+	OfficialCoding     bool               `json:"officialCoding"`
+	CodingSubmissions  []CodingSubmission `json:"codingSubmissions,omitempty"`
+	CodingSubmissionID string             `json:"codingSubmissionId,omitempty"`
+	GradingStatus      string             `json:"gradingStatus,omitempty"`
 }
 
 type AttemptRepository interface {

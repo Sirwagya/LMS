@@ -31,12 +31,21 @@ func (a *api) contestAttempt(w http.ResponseWriter, r *http.Request) error {
 	}
 	cmd := contest.AttemptCommand{Action: action, DeviceID: device.String()}
 	switch action {
-	case "state", "start":
-	case "takeover", "save", "submit":
+	case "state", "start", "grading":
+	case "takeover", "save", "submit", "code":
 		if json.Unmarshal(f.values["lease"], &cmd.Lease) != nil || cmd.Lease < 1 {
 			return invalid("Provide the current device lease.")
 		}
-		if action != "takeover" {
+		if action == "code" {
+			var index *int
+			requestID, err := uuid.Parse(f.optional("requestId"))
+			if err != nil || requestID.Version() != 4 || json.Unmarshal(f.values["questionIndex"], &index) != nil || index == nil {
+				return invalid("Provide a valid official submission request and question.")
+			}
+			cmd.Coding = contest.CodingCommand{RequestID: requestID.String(), Question: *index,
+				Language: f.optional("language"), Source: f.optional("source")}
+		}
+		if action == "save" || action == "submit" {
 			var revision *int64
 			if json.Unmarshal(f.values["revision"], &revision) != nil || revision == nil || *revision < 0 ||
 				json.Unmarshal(f.values["answers"], &cmd.Answers) != nil || cmd.Answers == nil {

@@ -8,7 +8,10 @@ import (
 	"vedam/lms/internal/domain/errs"
 )
 
-type ContestAuthoringRepo struct{ tx *TxManager }
+type ContestAuthoringRepo struct {
+	tx            *TxManager
+	EnableScoring bool
+}
 
 func NewContestAuthoringRepo(tx *TxManager) *ContestAuthoringRepo {
 	return &ContestAuthoringRepo{tx: tx}
@@ -136,9 +139,9 @@ func (r *ContestAuthoringRepo) replaceRoster(ctx context.Context, id string, stu
 
 func (r *ContestAuthoringRepo) Publish(ctx context.Context, actor contest.Actor, id string, revision int64) error {
 	tag, err := r.tx.Querier(ctx).Exec(ctx, `
-		UPDATE assessments SET status='published', published_at=clock_timestamp(), revision=revision+1
+		UPDATE assessments SET status='published', published_at=clock_timestamp(), revision=revision+1, official_scoring=$5
 		WHERE id=$1::uuid AND (owner_id=$2 OR $3::boolean) AND revision=$4 AND status='draft' AND opens_at>clock_timestamp()
-	`, id, actor.ID, actor.Admin, revision)
+	`, id, actor.ID, actor.Admin, revision, r.EnableScoring)
 	if err != nil {
 		return mapPGError(err)
 	}

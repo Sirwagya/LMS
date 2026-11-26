@@ -266,6 +266,10 @@ func (a *api) failure(w http.ResponseWriter, r *http.Request, err error) {
 		status, message = 401, "Please sign in."
 	case errors.Is(err, errs.ErrForbidden):
 		status, message = 403, err.Error()
+	case errors.Is(err, errs.ErrUnavailable):
+		status, message = 503, err.Error()
+	case errors.Is(err, errs.ErrRateLimited):
+		status, message = 429, err.Error()
 	case errors.Is(err, errs.ErrNotFound):
 		status, message = 404, err.Error()
 	case errors.Is(err, errs.ErrConflict), errors.Is(err, errs.ErrAlreadyPaid), errors.Is(err, errs.ErrAlreadyGraded), errors.Is(err, errs.ErrScheduleOverlap):

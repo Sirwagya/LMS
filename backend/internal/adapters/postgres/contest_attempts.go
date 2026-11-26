@@ -10,7 +10,10 @@ import (
 	"vedam/lms/internal/domain/contest"
 )
 
-type ContestAttemptRepo struct{ tx *TxManager }
+type ContestAttemptRepo struct {
+	tx             *TxManager
+	JudgeAvailable bool
+}
 
 func NewContestAttemptRepo(tx *TxManager) *ContestAttemptRepo {
 	return &ContestAttemptRepo{tx: tx}
@@ -22,23 +25,26 @@ type attemptRow struct {
 	started, deadline  time.Time
 	submitted          *time.Time
 	answers            map[int]contest.Answer
+	scored             bool
+	choiceSavedAt      map[int]time.Time
 }
 
 func (r *ContestAttemptRepo) Execute(ctx context.Context, id, student string, cmd contest.AttemptCommand) (contest.AttemptView, error) {
 	var view contest.AttemptView
 	err := r.tx.WithinTx(ctx, func(ctx context.Context) error {
 		var revision int64
+		var scoredContest bool
 		var cancelledAt *time.Time
 		var questionData []byte
 		q := r.tx.Querier(ctx)
 		err := q.QueryRow(ctx, `
 			SELECT a.id::text,a.title,a.instructions,a.opens_at,a.closes_at,
-			       a.duration_minutes,a.status,a.revision,a.cancelled_at,a.questions
+			       a.duration_minutes,a.status,a.revision,a.cancelled_at,a.questions,a.official_scoring
 			FROM assessments a JOIN assessment_roster s ON s.assessment_id=a.id
 			WHERE a.id=$1 AND s.student_id=$2 AND a.published_at IS NOT NULL
 			FOR SHARE OF a
 		`, id, student).Scan(&view.ID, &view.Title, &view.Instructions, &view.OpensAt, &view.ClosesAt,
-			&view.DurationMinutes, &view.Status, &revision, &cancelledAt, &questionData)
+			&view.DurationMinutes, &view.Status, &revision, &cancelledAt, &questionData, &scoredContest)
 		if err != nil {
 			return mapPGError(err)
 		}
@@ -61,14 +67,17 @@ func (r *ContestAttemptRepo) Execute(ctx context.Context, id, student string, cm
 		}
 
 		if !exists && cmd.Action == "start" && view.State == "ready" {
+			if scoredContest && !r.JudgeAvailable {
+				return contest.JudgeUnavailable()
+			}
 			// Recheck in the insert itself and honor the unique roster entry on simultaneous starts.
 			if _, err := q.Exec(ctx, `
 				WITH admission AS (SELECT clock_timestamp() AS now)
-				INSERT INTO assessment_attempts(assessment_id,student_id,contest_revision,device_id,started_at,deadline_at)
-				SELECT $1,$2,$3,$4,now,LEAST($6,now+make_interval(mins=>$7))
+				INSERT INTO assessment_attempts(assessment_id,student_id,contest_revision,device_id,started_at,deadline_at,scoring_enabled)
+				SELECT $1,$2,$3,$4,now,LEAST($6,now+make_interval(mins=>$7)),$8
 				FROM admission WHERE now >= $5 AND now < $6
 				ON CONFLICT (assessment_id,student_id) DO NOTHING
-			`, id, student, revision, cmd.DeviceID, view.OpensAt, view.ClosesAt, view.DurationMinutes); err != nil {
+			`, id, student, revision, cmd.DeviceID, view.OpensAt, view.ClosesAt, view.DurationMinutes, scoredContest); err != nil {
 				return mapPGError(err)
 			}
 			attempt, exists, err = r.lock(ctx, id, student)
@@ -101,6 +110,9 @@ func (r *ContestAttemptRepo) Execute(ctx context.Context, id, student string, cm
 		}
 		if attempt.submitted != nil {
 			attempt.apply(&view)
+			if attempt.scored {
+				return r.addGrading(ctx, false, &view, attempt.id)
+			}
 			return nil
 		}
 
@@ -119,8 +131,16 @@ func (r *ContestAttemptRepo) Execute(ctx context.Context, id, student string, cm
 		}
 		view.Lease = attempt.lease
 		writing := cmd.Action == "save" || cmd.Action == "submit"
-		if cmd.DeviceID != attempt.device || (writing && cmd.Lease != attempt.lease) {
+		if cmd.DeviceID != attempt.device || ((writing || cmd.Action == "code") && cmd.Lease != attempt.lease) {
 			view.State = "occupied"
+			return nil
+		}
+
+		if cmd.Action == "grading" {
+			view.State, view.Revision = "active", attempt.revision
+			if attempt.scored {
+				return r.addGrading(ctx, true, &view, attempt.id)
+			}
 			return nil
 		}
 
@@ -128,16 +148,31 @@ func (r *ContestAttemptRepo) Execute(ctx context.Context, id, student string, cm
 		if err := json.Unmarshal(questionData, &questions); err != nil {
 			return err
 		}
-		if writing {
+		switch cmd.Action {
+		case "code":
+			if !attempt.scored {
+				return contest.Invalid("Official coding submissions are unavailable for this attempt.")
+			}
+			if !r.JudgeAvailable {
+				return contest.JudgeUnavailable()
+			}
+			view.CodingSubmissionID, err = r.admitCode(ctx, attempt.id, cmd.Coding, questions, view.ServerTime)
+			if err != nil {
+				return err
+			}
+		case "save", "submit":
 			if err := r.write(ctx, &attempt, cmd, questions, view.ServerTime); err != nil {
 				return err
 			}
-		} else {
+		default:
 			view.Questions = contest.StudentQuestions(attempt.id, questions)
 		}
 		view.State, view.Answers, view.Revision = "active", attempt.answers, attempt.revision
 		if attempt.submitted != nil {
 			attempt.apply(&view)
+		}
+		if attempt.scored {
+			return r.addGrading(ctx, attempt.submitted == nil, &view, attempt.id)
 		}
 		return nil
 	})
@@ -151,20 +186,23 @@ func (a *attemptRow) apply(view *contest.AttemptView) {
 
 func (r *ContestAttemptRepo) lock(ctx context.Context, assessmentID, student string) (attemptRow, bool, error) {
 	var a attemptRow
-	var data []byte
+	var data, saved []byte
 	err := r.tx.Querier(ctx).QueryRow(ctx, `
 		SELECT id::text,device_id::text,lease,answer_revision,started_at,deadline_at,
-		       submitted_at,COALESCE(finish_reason,''),answers
+		       submitted_at,COALESCE(finish_reason,''),answers,scoring_enabled,choice_saved_at
 		FROM assessment_attempts WHERE assessment_id=$1 AND student_id=$2 FOR UPDATE
 	`, assessmentID, student).Scan(&a.id, &a.device, &a.lease, &a.revision, &a.started, &a.deadline,
-		&a.submitted, &a.reason, &data)
+		&a.submitted, &a.reason, &data, &a.scored, &saved)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, false, nil
 	}
 	if err != nil {
 		return a, false, mapPGError(err)
 	}
-	return a, true, json.Unmarshal(data, &a.answers)
+	if err := json.Unmarshal(data, &a.answers); err != nil {
+		return a, false, err
+	}
+	return a, true, json.Unmarshal(saved, &a.choiceSavedAt)
 }
 
 func (r *ContestAttemptRepo) write(ctx context.Context, a *attemptRow, cmd contest.AttemptCommand, questions []contest.Question, now time.Time) error {
@@ -179,6 +217,21 @@ func (r *ContestAttemptRepo) write(ctx context.Context, a *attemptRow, cmd conte
 		return nil
 	}
 	if !same {
+		if a.scored {
+			for index, q := range questions {
+				if q.Kind != "mcq" {
+					continue
+				}
+				next := cmd.Answers[index].Choice
+				previous := a.answers[index].Choice
+				switch {
+				case next == nil:
+					delete(a.choiceSavedAt, index)
+				case previous == nil || *previous != *next:
+					a.choiceSavedAt[index] = now
+				}
+			}
+		}
 		a.revision++
 		a.answers = cmd.Answers
 	}
@@ -189,10 +242,14 @@ func (r *ContestAttemptRepo) write(ctx context.Context, a *attemptRow, cmd conte
 	if err != nil {
 		return err
 	}
+	saved, err := json.Marshal(a.choiceSavedAt)
+	if err != nil {
+		return err
+	}
 	_, err = r.tx.Querier(ctx).Exec(ctx, `
-		UPDATE assessment_attempts SET answers=$2,answer_revision=$3,submitted_at=$4,finish_reason=NULLIF($5,'')
+		UPDATE assessment_attempts SET answers=$2,answer_revision=$3,submitted_at=$4,finish_reason=NULLIF($5,''),choice_saved_at=$6
 		WHERE id=$1
-	`, a.id, data, a.revision, a.submitted, a.reason)
+	`, a.id, data, a.revision, a.submitted, a.reason, saved)
 	return mapPGError(err)
 }
 
