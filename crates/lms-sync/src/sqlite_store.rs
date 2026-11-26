@@ -133,13 +133,7 @@ impl SqliteStore {
     }
 
     pub fn edit_profile(&self, profile: Value) -> Result<OutboxMutation, SyncError> {
-        if profile
-            .get("name")
-            .and_then(Value::as_str)
-            .is_none_or(|name| name.trim().is_empty() || name.encode_utf16().count() > 100)
-        {
-            return Err(invalid("profile requires a name"));
-        }
+        projection::validate_profile(&profile)?;
         self.write(|tx| {
             let snapshot = required_snapshot(tx, &self.account_id)?;
             let version = snapshot

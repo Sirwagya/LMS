@@ -31,6 +31,7 @@ import (
 )
 
 type Users interface {
+	ListStaffPage(context.Context, bool, int, int) ([]iam.PublicUser, error)
 	iam.UserReader
 	iam.UserWriter
 	UpdatePasswordIfCurrent(context.Context, string, string, string) (bool, error)
@@ -56,6 +57,7 @@ type Progress interface {
 	Version(context.Context, string, int64) (int64, bool, int64, error)
 }
 type Invoices interface {
+	ListPage(context.Context, int, int) ([]financedomain.FeeInvoice, error)
 	financedomain.InvoiceReader
 	financedomain.InvoiceWriter
 }
@@ -83,9 +85,15 @@ type Dependencies struct {
 	Catalog        Catalog
 	Notices        catalog.NoticeRepository
 	Assignments    Assignments
-	Submissions    assessment.SubmissionRepository
-	Attendance     learning.AttendanceReader
-	Discussions    interface {
+	Submissions    interface {
+		assessment.SubmissionRepository
+		ListPage(context.Context, int, int) ([]assessment.Submission, error)
+	}
+	Attendance interface {
+		learning.AttendanceReader
+		ListPage(context.Context, int, int) ([]learning.AttendanceSummary, error)
+	}
+	Discussions interface {
 		GetByID(context.Context, string) (learning.Discussion, error)
 	}
 	Progress  Progress
@@ -169,6 +177,7 @@ func New(d Dependencies) http.Handler {
 		{"GET", "/sync/pull", authenticated, a.pull},
 		{"POST", "/sync/push", authenticated, a.push},
 		{"GET", "/events", authenticated, a.events},
+		{"POST", "/session/revoke", authenticated, a.revokeSession},
 		{"GET", "/coding/jobs/{id}", student, a.gradingJob},
 		{"GET", "/program-enrolments", authenticated, a.programs},
 		{"GET", "/semesters", authenticated, a.semesters},

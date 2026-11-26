@@ -534,3 +534,47 @@ func TestOutboxQuarantinesMalformedRowAndDeliversNext(t *testing.T) {
 		t.Fatalf("quarantined=%t published=%t err=%v", quarantined, published, err)
 	}
 }
+
+func TestRevokeBearerOnlyEndsCurrentSession(t *testing.T) {
+	api := startAPI(t)
+	first := loginAs(t, api, "student")
+	second := loginAs(t, api, "student")
+	requireStatus(t, api, 200, "POST", "/api/v1/session/revoke", first.Token, "", map[string]any{})
+	requireStatus(t, api, 401, "GET", "/api/bootstrap", first.Token, "", nil)
+	requireStatus(t, api, 200, "GET", "/api/bootstrap", second.Token, "", nil)
+}
+
+func TestStaffWorkspacePagesPeopleAndKeepsFeesAdminOnly(t *testing.T) {
+	api := startAPI(t)
+	teacher := loginAs(t, api, "teacher")
+	admin := loginAs(t, api, "admin")
+	_, err := api.DB.Exec(t.Context(), `
+		INSERT INTO users(id, email, name, role, password_hash)
+		SELECT 'pagination-' || n, 'pagination-' || lpad(n::text, 2, '0') || '@vedam.local',
+		       'Test student ' || n, 'student', 'unused-in-test'
+		FROM generate_series(1, 28) AS n`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type directory struct {
+		Users   []struct{ ID, Role string }
+		Fees    []json.RawMessage
+		HasMore map[string]bool
+	}
+	first := decode[directory](t, requireStatus(t, api, 200, "GET", "/api/staff", teacher.Token, "", nil))
+	second := decode[directory](t, requireStatus(t, api, 200, "GET", "/api/staff?usersPage=1", teacher.Token, "", nil))
+	if len(first.Users) != 25 || !first.HasMore["users"] || len(second.Users) != 4 || second.HasMore["users"] {
+		t.Fatalf("unexpected page boundaries: %d then %d", len(first.Users), len(second.Users))
+	}
+	seen := map[string]bool{}
+	for _, u := range append(first.Users, second.Users...) {
+		if seen[u.ID] || u.Role != "student" {
+			t.Fatalf("unexpected user in teacher pages: %s (%s)", u.ID, u.Role)
+		}
+		seen[u.ID] = true
+	}
+	adminPage := decode[directory](t, requireStatus(t, api, 200, "GET", "/api/staff", admin.Token, "", nil))
+	if len(first.Fees) != 0 || len(second.Fees) != 0 || len(adminPage.Fees) == 0 {
+		t.Fatal("fee visibility changed across staff roles")
+	}
+}

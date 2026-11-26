@@ -1,5 +1,7 @@
 import type { PortalUser, Submission } from "../session";
+export type StaffRecords = "users" | "submissions" | "attendance" | "fees";
 export interface StaffData {
+  hasMore: Record<StaffRecords, boolean>;
   users: PortalUser[];
   submissions: Submission[];
   attendance: {

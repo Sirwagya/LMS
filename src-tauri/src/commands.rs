@@ -454,6 +454,7 @@ impl DesktopCore {
     async fn handle_auth(&self, route: &str, body: Option<Value>) -> Result<Value, String> {
         let _change = self.session_change.lock().await;
         let payload = body.ok_or_else(|| "Credentials required.".to_string())?;
+        let previous = self.vault.load();
         let mut response = self
             .proxy_raw("POST", route, None, Some(payload))
             .await
@@ -480,7 +481,20 @@ impl DesktopCore {
             role: role.clone(),
             token: token.clone(),
         };
-        self.replace_session(&session).await?;
+        if let Some(previous) = previous.as_ref()
+            && previous.token != session.token
+            && let Err(err) = self.revoke_bearer(&previous.token).await
+        {
+            let _ = self.revoke_bearer(&session.token).await;
+            return Err(format!("Could not end the previous session. {err}"));
+        }
+        if let Err(err) = self.replace_session(&session).await {
+            let _ = self.revoke_bearer(&session.token).await;
+            if let Some(previous) = previous.as_ref() {
+                let _ = self.invalidate_session(previous).await;
+            }
+            return Err(err);
+        }
 
         if role == "student" {
             let account = self.ensure_student_session(&session).await?;
@@ -493,6 +507,26 @@ impl DesktopCore {
             obj.remove("token");
         }
         Ok(response)
+    }
+
+    async fn revoke_bearer(&self, token: &str) -> Result<(), String> {
+        let response = self
+            .http
+            .post(format!("{}/api/v1/session/revoke", self.api_base_url))
+            .bearer_auth(token)
+            .timeout(Duration::from_secs(5))
+            .json(&json!({}))
+            .send()
+            .await
+            .map_err(|_| "Session revocation could not reach the server.".to_string())?;
+        if response.status().is_success() || response.status() == StatusCode::UNAUTHORIZED {
+            Ok(())
+        } else {
+            Err(format!(
+                "Session revocation failed (HTTP {}).",
+                response.status()
+            ))
+        }
     }
 
     async fn handle_logout(&self) -> Result<Value, String> {

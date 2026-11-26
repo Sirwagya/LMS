@@ -52,7 +52,15 @@ func (r *AttendanceRepo) ListForStudent(ctx context.Context, userID string) (map
 }
 
 func (r *AttendanceRepo) ListAll(ctx context.Context) ([]learning.AttendanceSummary, error) {
-	rows, err := r.tx.Querier(ctx).Query(ctx, `SELECT user_id, course_code, attended, total FROM attendance_summaries`)
+	return r.list(ctx, nil, 0)
+}
+
+func (r *AttendanceRepo) ListPage(ctx context.Context, limit, offset int) ([]learning.AttendanceSummary, error) {
+	return r.list(ctx, &limit, offset)
+}
+
+func (r *AttendanceRepo) list(ctx context.Context, limit *int, offset int) ([]learning.AttendanceSummary, error) {
+	rows, err := r.tx.Querier(ctx).Query(ctx, `SELECT user_id, course_code, attended, total FROM attendance_summaries ORDER BY user_id, course_code LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, mapPGError(err)
 	}
@@ -356,11 +364,19 @@ func (r *SubmissionRepo) ListForStudent(ctx context.Context, userID string) ([]a
 }
 
 func (r *SubmissionRepo) ListAll(ctx context.Context) ([]assessment.Submission, error) {
+	return r.list(ctx, nil, 0)
+}
+
+func (r *SubmissionRepo) ListPage(ctx context.Context, limit, offset int) ([]assessment.Submission, error) {
+	return r.list(ctx, &limit, offset)
+}
+
+func (r *SubmissionRepo) list(ctx context.Context, limit *int, offset int) ([]assessment.Submission, error) {
 	rows, err := r.tx.Querier(ctx).Query(ctx, `
 		SELECT s.id, s.user_id, u.name, s.assignment_id, s.course_code, s.answer, s.filename, s.asset_id, s.score, s.feedback,
 		       to_char(s.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
-		FROM submissions s JOIN users u ON u.id = s.user_id ORDER BY s.created_at DESC
-	`)
+		FROM submissions s JOIN users u ON u.id = s.user_id ORDER BY s.created_at DESC, s.id DESC LIMIT $1 OFFSET $2
+	`, limit, offset)
 	if err != nil {
 		return nil, mapPGError(err)
 	}
@@ -570,10 +586,18 @@ func (r *FinanceRepo) ListForStudent(ctx context.Context, userID string) ([]fina
 }
 
 func (r *FinanceRepo) ListAll(ctx context.Context) ([]finance.FeeInvoice, error) {
+	return r.list(ctx, nil, 0)
+}
+
+func (r *FinanceRepo) ListPage(ctx context.Context, limit, offset int) ([]finance.FeeInvoice, error) {
+	return r.list(ctx, &limit, offset)
+}
+
+func (r *FinanceRepo) list(ctx context.Context, limit *int, offset int) ([]finance.FeeInvoice, error) {
 	rows, err := r.tx.Querier(ctx).Query(ctx, `
 		SELECT id, user_id, invoice_no, description, semester, amount, due_date, paid_date, status, receipt_ready, simulated, version
-		FROM fee_invoices ORDER BY id ASC
-	`)
+		FROM fee_invoices ORDER BY id ASC LIMIT $1 OFFSET $2
+	`, limit, offset)
 	if err != nil {
 		return nil, mapPGError(err)
 	}

@@ -108,4 +108,14 @@ Set `APP_ENV=production`, `COOKIE_SECURE=true`, and an HTTPS `PUBLIC_ORIGIN` whe
 
 Production disables the demo accounts, demo seeder, and the local macOS grader. Hosting untrusted grading requires an isolated runner with kernel-enforced memory limits.
 
-The worker reaps superseded and abandoned staged submission attachments after a grace period. Files left by older versions without a matching database row require a separate storage reconciliation.
+The staff directory returns up to 25 records per list. Clients can page users, submissions, attendance, and invoices independently using `usersPage`, `submissionsPage`, `attendancePage`, and `feesPage`. Each list reports whether another page exists. Invoices remain administrator-only.
+
+The desktop app ends its previously active bearer session on account switch via `POST /api/v1/session/revoke`. Other sessions on the same account remain active.
+
+The worker reaps superseded and abandoned staged submission attachments after a grace period. To reconcile files from older versions, run the following from the repository root with the same database and asset configuration as the API.
+
+```sh
+(cd backend && go run ./cmd/reconcile-assets)
+```
+
+The default run lists untracked UUID-named submission files older than 24 hours. For a custom deployment, stop the API and worker during a maintenance window, verify the database and storage configuration, then rerun with `-quarantine` to move those files into a private directory within the same asset root. The command leaves files with database metadata alone and preserves quarantined files for recovery.

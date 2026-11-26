@@ -5,7 +5,7 @@ export function OverviewSection({ data }: { data: StaffData }) {
     <>
       <dl className="metrics">
         <div className="metric">
-          <dt>Students</dt>
+          <dt>Students on this page</dt>
           <dd>{data.users.filter((u) => u.role === "student").length}</dd>
         </div>
         <div className="metric">
@@ -13,7 +13,7 @@ export function OverviewSection({ data }: { data: StaffData }) {
           <dd>{courses().length}</dd>
         </div>
         <div className="metric">
-          <dt>Awaiting grading</dt>
+          <dt>Awaiting grading on this page</dt>
           <dd>{data.submissions.filter((s) => !s.score).length}</dd>
         </div>
       </dl>
@@ -25,7 +25,7 @@ export function OverviewSection({ data }: { data: StaffData }) {
           workspace.
         </p>
         <p className="inline-note mt-4">
-          Local sample data · Files and records stay in this machine's SQLite
+          Local sample data · Files and records stay in this machine's PostgreSQL
           database. Fee payments are simulations.
         </p>
       </section>

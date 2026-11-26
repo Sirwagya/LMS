@@ -78,6 +78,30 @@ func (r *UserRepo) ListAll(ctx context.Context) ([]iam.User, error) {
 	return out, rows.Err()
 }
 
+func (r *UserRepo) ListStaffPage(ctx context.Context, admin bool, limit, offset int) ([]iam.PublicUser, error) {
+	rows, err := r.tx.Querier(ctx).Query(ctx, `
+       SELECT id,email,name,role FROM users
+       WHERE $1::boolean OR role='student'
+       ORDER BY email ASC LIMIT $2 OFFSET $3
+    `, admin, limit, offset)
+	if err != nil {
+		return nil, mapPGError(err)
+	}
+	defer rows.Close()
+	var users []iam.PublicUser
+	for rows.Next() {
+		var u iam.PublicUser
+		var role string
+		if err := rows.Scan(&u.ID, &u.Email, &u.Name, &role); err != nil {
+			return nil, err
+		}
+		u.Role = iam.Role(role)
+		u.Profile = json.RawMessage(`{}`)
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
 func (r *UserRepo) Create(ctx context.Context, user *iam.User) error {
 	profile := user.Profile
 	if len(profile) == 0 {

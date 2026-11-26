@@ -297,3 +297,22 @@ fn partial_catalog_page_persists_refresh_requirement_across_reopen() {
     assert!(!reopened.needs_bootstrap_refresh().unwrap());
     assert_eq!(reopened.get_bootstrap_json().unwrap(), Some(refreshed));
 }
+
+#[test]
+fn offline_profile_rejects_invalid_media_and_links_before_enqueue() {
+    let fixture = fixture();
+    let store = fixture.store;
+    ready(&store);
+    for profile in [
+        json!({"name":"Student","avatarUrl":"data:image/png;base64,?"}),
+        json!({"name":"Student","bannerUrl":"data:image/svg+xml;base64,YQ=="}),
+        json!({"name":"Student","platforms":[{"url":"https://user:password@example.test"}]}),
+        json!({"name":"Student","platforms":[{"url":"file:///profile"}]}),
+    ] {
+        assert!(matches!(
+            store.edit_profile(profile),
+            Err(SyncError::Protocol(_))
+        ));
+    }
+    assert_eq!(store.status_snapshot().unwrap().pending_count, 0);
+}

@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { lecturesBySubject, drawerNotices } from "../data/lmsData";
 import { api } from "./api";
 import { useSession } from "./session";
-import type { StaffData } from "./staff/types";
+import type { StaffData, StaffRecords } from "./staff/types";
 import { ActionForm, Field } from "./staff/Forms";
 import { courses } from "./staff/selectors";
 import { DiscussionsSection } from "./staff/DiscussionsSection";
@@ -25,20 +25,59 @@ export function StaffPortal() {
   useEffect(() => {
     document.title = `${tab} · ${user.role === "admin" ? "Admin" : "Teacher"} · Vedam`;
   }, [tab, user.role]);
+  const [pages, setPages] = useState<Record<StaffRecords, number>>({
+    users: 0, submissions: 0, attendance: 0, fees: 0,
+  });
+  const [loading, setLoading] = useState(true);
+  const requestID = useRef(0);
+  const loadPage = useCallback(async (next: Record<StaffRecords, number>) => {
+    const id = ++requestID.current;
+    const query = new URLSearchParams(
+      Object.entries(next).map(([kind, page]) => [kind + "Page", String(page)]),
+    );
+    setLoading(true);
+    try {
+      const result = await api<StaffData>(`/staff?${query}`);
+      if (requestID.current === id) {
+        setData(result);
+        setPages(next);
+        setError("");
+      }
+    } finally {
+      if (requestID.current === id) setLoading(false);
+    }
+  }, []);
   const reload = async () => {
     await refresh();
-    setData(await api<StaffData>("/staff"));
+    await loadPage(pages);
   };
   useEffect(() => {
-    api<StaffData>("/staff")
-      .then(setData)
+    void loadPage({ users: 0, submissions: 0, attendance: 0, fees: 0 })
       .catch((e) => setError(e.message));
-  }, []);
+    return () => { requestID.current += 1; };
+  }, [loadPage]);
+  const pagination = (kind: StaffRecords, label: string) => {
+    const page = pages[kind];
+    if (page === 0 && !data?.hasMore[kind]) return null;
+    const changePage = (target: number) => {
+      void loadPage({ ...pages, [kind]: target }).catch((e) => setError(e.message));
+    };
+    return (
+      <nav className="inline-actions" aria-label={label}>
+        <button className="btn btn-secondary" type="button" disabled={loading || page === 0}
+          onClick={() => changePage(page - 1)}>Previous</button>
+        <span>{label} · Page {page + 1}</span>
+        <button className="btn btn-secondary" type="button" disabled={loading || !data?.hasMore[kind] || page >= 10000}
+          onClick={() => changePage(page + 1)}>Next</button>
+      </nav>
+    );
+  };
   const [discussionId, setDiscussionId] = useState<number>(
     Object.values(lecturesBySubject).flat()[0]?.id || 0,
   );
   const students = data?.users.filter((u) => u.role === "student") || [];
   const studentSelect = (
+    <>
     <label>
       Student
       <select name="userId" required>
@@ -50,6 +89,8 @@ export function StaffPortal() {
         ))}
       </select>
     </label>
+    {pagination("users", "Student choices")}
+    </>
   );
   const tabs = [
     "Overview",
@@ -115,6 +156,7 @@ export function StaffPortal() {
           </div>
           <button
             className="btn btn-secondary"
+            disabled={loading}
             onClick={() => reload().catch((e) => setError(e.message))}
           >
             Refresh records
@@ -181,9 +223,10 @@ export function StaffPortal() {
             {tab === "Courses" && <CoursesSection reload={reload} />}
             {tab === "Lectures" && <LecturesSection reload={reload} />}
             {tab === "Assignments" && <AssignmentsSection reload={reload} />}
-            {tab === "Submissions" && (
+            {tab === "Submissions" && (<>
               <SubmissionsSection data={data} reload={reload} />
-            )}
+              {pagination("submissions", "Submissions")}
+            </>)}
             {tab === "Attendance" && (
               <AttendanceSection
                 data={data}
@@ -201,6 +244,11 @@ export function StaffPortal() {
               />
             )}
             {tab === "People" && <PeopleSection data={data} reload={reload} />}
+            {tab === "Attendance" && pagination("attendance", "Attendance records")}
+            {tab === "Fees" && pagination("fees", "Invoices")}
+            {tab === "People" && pagination("users", "People")}
+            {tab === "Overview" && pagination("users", "People")}
+            {tab === "Overview" && pagination("submissions", "Submissions")}
           </div>
         )}
       </main>

@@ -188,6 +188,17 @@ func (a *api) logout(w http.ResponseWriter, r *http.Request) error {
 	a.cookie(w, "", -1)
 	return ok(w, 200, nil)
 }
+func (a *api) revokeSession(w http.ResponseWriter, r *http.Request) error {
+	scheme, _, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !strings.EqualFold(scheme, "Bearer") {
+		return problem(401, "Bearer authentication required.")
+	}
+	state := r.Context().Value(stateKey).(*requestState)
+	if err := a.Sessions.Revoke(r.Context(), state.actor.UserID, state.token); err != nil {
+		return problem(503, "Session service unavailable.")
+	}
+	return ok(w, 200, nil)
+}
 func (a *api) password(w http.ResponseWriter, r *http.Request) error {
 	f := readBody(w, r, 4096)
 	current, next := f.text("current", "current password", 128), f.text("next", "new password", 128)
@@ -254,7 +265,7 @@ func validateProfile(raw json.RawMessage) (string, error) {
 			continue
 		}
 		prefix := profileImage.FindStringIndex(value)
-		if prefix == nil || len(value) > base64.StdEncoding.EncodedLen(5<<20)+64 {
+		if prefix == nil || strings.ContainsAny(value, "\r\n") || len(value) > base64.StdEncoding.EncodedLen(5<<20)+64 {
 			return "", invalid("Upload a PNG, JPEG, WebP or GIF image up to 5 MB.")
 		}
 		if data, err := base64.StdEncoding.Strict().DecodeString(value[prefix[1]:]); err != nil || len(data) == 0 || len(data) > 5<<20 {
@@ -272,7 +283,7 @@ func validateProfile(raw json.RawMessage) (string, error) {
 	}
 	for _, p := range platforms {
 		u, err := url.Parse(p.URL)
-		if p.URL != "" && (len(p.URL) > 2048 || err != nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https")) {
+		if p.URL != "" && (len(p.URL) > 2048 || (!strings.HasPrefix(p.URL, "https://") && !strings.HasPrefix(p.URL, "http://")) || err != nil || u.Hostname() == "" || u.User != nil || (u.Scheme != "http" && u.Scheme != "https")) {
 			return "", invalid("Profile links must begin with https:// or http://.")
 		}
 	}

@@ -269,7 +269,7 @@ export default function Portal() {
       {data.user.role === "student" ? (
         <App key={data.user.id} />
       ) : (
-        <StaffPortal />
+        <StaffPortal key={data.user.id} />
       )}
     </SessionContext.Provider>
   );
